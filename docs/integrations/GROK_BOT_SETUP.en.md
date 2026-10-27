@@ -24,6 +24,14 @@ Webhook URLs cannot contain credentials, query strings, fragments, custom ports 
 
 Create an independent Routine while preserving existing support, DingTalk and Zoho workflows. Limit this Routine to the two tools on this connection; do not forward evidence through other connectors.
 
+Activate in this order so the MCP endpoint is available before the client connects:
+
+1. Deploy the base service and obtain its production HTTPS URL.
+2. Create the dedicated Work OS Routine and obtain its actual webhook URL and authentication secret without sending a trigger request.
+3. Complete all required Bot settings in the hosting environment and redeploy. `GROK_BOT_ORG_ID` may use the explicitly configured `DINGTALK_CORP_ID`; setting only the worker token does not enable MCP.
+4. Connect remote MCP using the URL and independent Bearer below, and confirm that it lists only the two Work OS tools.
+5. Give the Routine these tools and the instructions below, then test dispatch, completion and human acceptance with one fictional task.
+
 Remote MCP URL: `https://your-app.example/api/integrations/grok-bot/mcp`. Configure `Authorization: Bearer <GROK_BOT_WORKER_TOKEN>` using a remote connection that supports a custom Bearer header. Do not place it in the URL. The server exposes only known-job pickup and completion; it has no employee directory, task listing, salary or employment decision tool.
 
 Routine instruction template:
@@ -44,7 +52,7 @@ If already completed, stop. On expiry, conflict or failure, stop;
 never automatically retry or start another run.
 ```
 
-The server implements MCP `2026-07-28` per-request negotiation and the `2025-11-25` initialize lifecycle, plus `2025-03-26` compatibility for legacy requests without a protocol header. It uses JSON responses without sessions or an SSE listener; GET and DELETE return 405. Protocol tests do not establish compatibility with a real Grok Bot client.
+The server implements MCP `2026-07-28` per-request negotiation and the `2025-11-25` initialize lifecycle, plus `2025-03-26` compatibility for legacy requests without a protocol header. It uses JSON responses without sessions or an SSE listener. Incomplete Bot configuration returns 503; once configured, missing or invalid Bearer credentials return 401 and a forbidden Origin returns 403. Authenticated GET and DELETE requests return 405. Protocol tests do not establish compatibility with a real Grok Bot client.
 
 ## State and human control
 

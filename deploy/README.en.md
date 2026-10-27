@@ -36,7 +36,7 @@ The production host supplies an HTTPS subdomain. GitHub Pages remains a public d
 
 An enterprise administrator must grant the independent app its login identity, enterprise membership mapping and approved department/member read permissions. Work notifications still require the app AgentId and explicit activation. Use the current developer console and official documentation for exact scope names. Limit app visibility to approved employees. The model receives only the authorized task criteria and submitted text; it does not fetch links or receive compensation or the employee directory. Use fictional material for the first real call.
 
-See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Deploy the base service before adding Bot settings in the hosting environment; the template does not require buying model API credits. Bot review is asynchronous: webhook acceptance means execution started; results return separately through restricted MCP tools. Bot usage still has plan limits. Bots on one account share a cloud computer and logins, so workflow separation does not replace server authorization.
+See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Deploy the base service, obtain the dedicated Routine's actual webhook URL and secret without triggering it, then complete the Bot environment settings and redeploy before connecting the MCP client. Setting only the worker token does not enable MCP; incomplete Bot settings produce 503 on that endpoint. The template does not require buying model API credits. Bot review is asynchronous: webhook acceptance means execution started; results return separately through restricted MCP tools. Bot usage still has plan limits. Bots on one account share a cloud computer and logins, so workflow separation does not replace server authorization.
 
 ## Existing server alternative
 
@@ -50,7 +50,7 @@ See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Depl
 ## Acceptance and releases
 
 - Require CI: TypeScript, PGlite, real PostgreSQL, Docker build, same-origin API, security headers, fail-closed login and an unconfigured Bot adapter.
-- `/healthz` checks database connectivity. `/api/capabilities` reports configuration only; `configured` is not verified acceptance. `productionReady:false` remains until real tenant acceptance.
+- `/healthz` checks database connectivity. `/api/capabilities` reports configuration only; `configured` is not verified acceptance. In this version, `productionReady:false` is a constant marker that does not change with configuration or real tenant acceptance. It is not a deployment-failure signal or a substitute for acceptance records.
 - Verify actual manager and employee login, rejection of unapproved enterprise/departments, employee scope, no privilege escalation, and immediate loss of sessions after member deactivation through sync.
 - Create OKRs/KRs and a task; submit evidence; verify Grok citations; inspect and accept as manager; reload and confirm persistence. Stale writes must return 409 without silent overwrites. In Bot mode also verify pending, leased, completed and uncertain/failed states, explicit retry, invalidated leases and rejection of old submissions. Dispatch must never masquerade as a completed assessment.
 - Check Chinese/English, theme, logout and login. Only theme/language preferences may use localStorage, never task data or sessions.

@@ -175,7 +175,7 @@ curl --fail --silent --show-error http://127.0.0.1:3001/tasks \
 
 `POST /objectives` 正文为 `{title,level:"personal"|"department",ownerId?}`；`POST /objectives/:id/key-results` 为 `{title,baseline,target,actual?,direction:"increase"|"decrease",unit}`。普通部门角色不能创建全企业公司级目标，避免扩大跨工作区权限。
 
-Grok 通过公司批准的模型 API 调用，独立于现有客服 Grok Bot。评审只发送当前任务标准和当前提交的文本，不发送薪资/全员资料，不自动抓取 URL。服务端验证所有标准恰好出现一次、引用 ID 属于本次提交、引用原文实际存在。失败或旧版本返回待处理错误，不填低分；AI 不改变任务验收状态、不作人事判断。`GET /tasks/:id/evaluations` 保留版本历史，负责人仍需实际核对并验收。
+Grok 评审可选择模型 API（`AI_REVIEW_MODE=api`）或 [Bot 异步通道](docs/integrations/GROK_BOT_SETUP.md)（`AI_REVIEW_MODE=bot`）；Bot 使用独立 Work OS Routine，保留现有客服 Bot 工作流。评审只传递当前任务标准和当前提交的文本，不发送薪资/全员资料，不自动抓取 URL。服务端验证所有标准恰好出现一次、引用 ID 属于本次提交、引用原文实际存在。失败或旧版本返回待处理错误，不填低分；AI 不改变任务验收状态、不作人事判断。`GET /tasks/:id/evaluations` 保留版本历史，负责人仍需实际核对并验收。
 
 通知请求为 `{taskIds:[...],idempotencyKey:"UUID"}`，仅负责人可发给当前范围内的任务本人。需另开 `DINGTALK_NOTIFICATIONS_ENABLED=true` 并配置 AgentId；未开启不会发送。返回 `queued` 只表示钉钉接受发送请求，`sent:false` 不冒充已送达；超时标为 `unknown`，同一幂等键不自动重发。不得将通知预览当作真实送达。
 

@@ -41,9 +41,10 @@ services:
         sync: false
       - key: DINGTALK_NOTIFICATIONS_ENABLED
         value: 'false'
-      # Add the GROK_BOT_* credentials in Environment after the independent
-      # Bot routine and scoped MCP connection are ready. Missing settings
-      # disable assessment; they never enable developer authentication.
+      # Deploy the base service, then obtain the independent routine's webhook
+      # URL/secret without triggering it. Add all GROK_BOT_* settings and redeploy
+      # before connecting the scoped MCP client; incomplete Bot settings return 503.
+      # Missing settings disable assessment; they never enable developer authentication.
       # Optional API fallback: AI_REVIEW_MODE=api, AI_PROVIDER_API_KEY, AI_MODEL_ID.
       # Optional notifications: DINGTALK_AGENT_ID and the explicit enable switch.
 databases:
