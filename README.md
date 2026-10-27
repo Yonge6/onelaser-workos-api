@@ -6,7 +6,9 @@
 
 [后台仓库](https://github.com/Yonge6/onelaser-workos-api) · [前端仓库](https://github.com/Yonge6/onelaser-workos) · [前端交互演示](https://yonge6.github.io/onelaser-workos/)
 
-**原 GitHub Pages 站点仍为演示部署。** 只有部署同源 live runtime 并配置后才调用本仓库 API；原演示记录仍保存在浏览器 `localStorage`。虚构数据仅用于研发验证。钉钉登录、Grok 服务端评审和通知适配器已实现；实际启用需企业应用授权、模型 API 密钥和部署配置，不能据代码实现声称线上授权已经通过。
+**原 GitHub Pages 站点仍为演示部署。** 只有部署同源 live runtime 并配置后才调用本仓库 API；原演示记录仍保存在浏览器 `localStorage`。虚构数据仅用于研发验证。钉钉登录、Grok 服务端评审和通知适配器已实现；实际启用需企业应用授权、部署配置，以及所选评审通道的凭证，不能据代码实现声称线上授权已经通过。
+
+评审默认使用独立模型 API（`AI_REVIEW_MODE=api`）；可选 [Grok Bot 异步评审](docs/integrations/GROK_BOT_SETUP.md)（`AI_REVIEW_MODE=bot`），通过专用 Routine 与受保护的远程 MCP 领取/回传任务。Bot 模式不要求模型 API 余额；账户实际额度和线上连接仍须核验。每企业每 UTC 小时最多 10 次新触发，无自动重试。
 
 ## 本地运行
 

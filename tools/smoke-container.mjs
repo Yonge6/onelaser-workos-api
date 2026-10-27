@@ -36,6 +36,8 @@ assert.equal(capabilities.frontendConnected, true);
 assert.equal(capabilities.teamMode, 'company');
 assert.equal(capabilities.auth.loginEnabled, false);
 assert.equal(capabilities.aiReview, 'not_integrated');
+assert.equal(capabilities.aiReviewMode, 'bot');
+assert.ok(capabilities.setup.aiMissing.includes('GROK_BOT_WEBHOOK_URL'));
 assert.equal(capabilities.employeeDecisions, 'not_supported');
 assert.ok(capabilities.setup.dingtalkMissing.includes('DINGTALK_CLIENT_SECRET'));
 for (const path of ['/api/tasks', '/api/directory', '/api/objectives', '/api/auth/csrf']) {
@@ -43,6 +45,10 @@ for (const path of ['/api/tasks', '/api/directory', '/api/objectives', '/api/aut
 }
 assert.equal((await fetch(origin + '/api/auth/dev-login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })).status, 404);
 assert.equal((await fetch(origin + '/api/auth/dingtalk/start', {redirect:'manual'})).status, 501);
+assert.equal((await fetch(origin + '/api/integrations/grok-bot/mcp', {
+  method:'POST', headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
+  body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{}})
+})).status, 503);
 for (const path of ['/.env', '/src/server.ts', '/deploy/Caddyfile']) {
   assert.equal((await fetch(origin + path)).status, 404);
 }

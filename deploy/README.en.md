@@ -8,7 +8,7 @@ The production host supplies an HTTPS subdomain. GitHub Pages remains a public d
 
 - One company workspace for approximately 10 people, with `WORKOS_TEAM_MODE=company`. The configured DingTalk enterprise and department allowlist still apply.
 - Managers are explicitly listed in `DINGTALK_MANAGER_USER_IDS`; the first login never becomes an administrator automatically.
-- A separate Grok model API integration leaves the existing customer support Bot and Zoho workflows untouched.
+- The pilot prefers an independent Work OS workflow using the existing Grok Bot allowance. The existing support Bot and Zoho workflows stay untouched. The separately billed model API remains an optional fallback.
 - No demo seeds or developer login in production. Business content is never persisted in browser localStorage.
 - DingTalk notifications are disabled initially. The designated manager inspects and accepts deliverables; AI findings remain advisory.
 
@@ -26,11 +26,17 @@ The production host supplies an HTTPS subdomain. GitHub Pages remains a public d
 | `DINGTALK_CORP_ID` | Approved enterprise |
 | `DINGTALK_ALLOWED_DEPARTMENT_IDS` | Approved real department IDs, comma separated; required in company mode |
 | `DINGTALK_MANAGER_USER_IDS` | Explicit manager user IDs, comma separated |
-| `AI_PROVIDER_API_KEY` | Separate xAI model API key |
-| `AI_MODEL_ID` | An account-accessible model supporting structured output |
+| `AI_REVIEW_MODE` | Template selects `bot`; code defaults to `api`. Incomplete integration settings disable assessment |
+| `GROK_BOT_WEBHOOK_URL`, `GROK_BOT_WEBHOOK_SECRET` | Dedicated routine's actual HTTPS trigger URL and secret |
+| `GROK_BOT_WEBHOOK_ALLOWED_HOST` | Exact verified routine hostname, without wildcards or local/private destinations |
+| `GROK_BOT_WORKER_TOKEN` | Separate random MCP credential, at least 32 characters, different from the webhook secret |
+| `GROK_BOT_ORG_ID` | Approved worker organization; may fall back to the explicitly configured DingTalk corporation |
+| `AI_PROVIDER_API_KEY`, `AI_MODEL_ID` | Required only in `api` mode: separate API key and an account-accessible model supporting structured output |
 | `DINGTALK_AGENT_ID` | App AgentId, required for work notifications |
 
-An enterprise administrator must grant the independent app its login identity, enterprise membership mapping and approved department/member read permissions. Grant work notification permission only when enabling that feature. Use the current developer console and official documentation for exact scope names. Limit app visibility to approved employees. The model receives only the authorized task criteria and submitted text; it does not fetch links or receive compensation or the employee directory. Use fictional material for the first real call.
+An enterprise administrator must grant the independent app its login identity, enterprise membership mapping and approved department/member read permissions. Work notifications still require the app AgentId and explicit activation. Use the current developer console and official documentation for exact scope names. Limit app visibility to approved employees. The model receives only the authorized task criteria and submitted text; it does not fetch links or receive compensation or the employee directory. Use fictional material for the first real call.
+
+See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Deploy the base service before adding Bot settings in the hosting environment; the template does not require buying model API credits. Bot review is asynchronous: webhook acceptance means execution started; results return separately through restricted MCP tools. Bot usage still has plan limits. Bots on one account share a cloud computer and logins, so workflow separation does not replace server authorization.
 
 ## Existing server alternative
 
@@ -43,10 +49,10 @@ An enterprise administrator must grant the independent app its login identity, e
 
 ## Acceptance and releases
 
-- Require CI: TypeScript, PGlite, real PostgreSQL, Docker build, same-origin API, security headers and fail-closed login.
+- Require CI: TypeScript, PGlite, real PostgreSQL, Docker build, same-origin API, security headers, fail-closed login and an unconfigured Bot adapter.
 - `/healthz` checks database connectivity. `/api/capabilities` reports configuration only; `configured` is not verified acceptance. `productionReady:false` remains until real tenant acceptance.
 - Verify actual manager and employee login, rejection of unapproved enterprise/departments, employee scope, no privilege escalation, and immediate loss of sessions after member deactivation through sync.
-- Create OKRs/KRs and a task; submit evidence; verify Grok citations; inspect and accept as manager; reload and confirm persistence. Stale writes must return 409 without silent overwrites.
+- Create OKRs/KRs and a task; submit evidence; verify Grok citations; inspect and accept as manager; reload and confirm persistence. Stale writes must return 409 without silent overwrites. In Bot mode also verify pending, leased, completed and uncertain/failed states, explicit retry, invalidated leases and rejection of old submissions. Dispatch must never masquerade as a completed assessment.
 - Check Chinese/English, theme, logout and login. Only theme/language preferences may use localStorage, never task data or sessions.
 - Approve a specific test recipient before setting `DINGTALK_NOTIFICATIONS_ENABLED=true`. `queued` means provider acceptance, not confirmed delivery.
 - Confirm backup retention, costs and a restore drill. `frontend-revision.txt` pins the frontend; updating it requires rebuilding the image. Keep database migrations compatible with any rollback.

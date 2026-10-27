@@ -51,13 +51,15 @@ export async function buildApp(options:AppOptions) {
   app.decorateRequest('sessionToken',null);
   app.decorateRequest('cookieAuthenticated',false);
   const integrations={...options.integrations,secureCookies:environment==='production'||options.integrations?.secureCookies===true};
-  const publicPaths=new Set(['/health','/capabilities','/auth/dev-login','/auth/dingtalk/start','/auth/dingtalk/callback']);
+  // This exact endpoint has its own worker-only bearer authentication, never a user session.
+  const publicPaths=new Set(['/health','/capabilities','/auth/dev-login','/auth/dingtalk/start','/auth/dingtalk/callback','/integrations/grok-bot/mcp']);
   app.addHook('onRequest',async(req,reply)=>{
     req.language=languageFrom(req.headers['accept-language']);
     reply.header('Content-Language',req.language).header('Cache-Control','no-store').header('X-Content-Type-Options','nosniff').header('Referrer-Policy','no-referrer');
     if(publicPaths.has(req.url.split('?')[0])) return;
     const cookieToken=readCookie(req.headers.cookie,sessionCookieName(integrations.secureCookies));
     const token=req.headers.authorization?(req.headers.authorization.startsWith('Bearer ')?req.headers.authorization.slice(7):undefined):cookieToken;
+    if(token&&integrations.bot&&sameSecret(token,integrations.bot.workerToken))deny(401,'UNAUTHENTICATED','Authentication is required');
     req.sessionToken=token||null;req.cookieAuthenticated=!req.headers.authorization&&!!cookieToken;
     req.actor=await resolveSession(db,token?'Bearer '+token:undefined);
     if(!req.actor) deny(401,'UNAUTHENTICATED','Authentication is required');
@@ -81,7 +83,7 @@ export async function buildApp(options:AppOptions) {
     catch { return reply.code(503).send({status:'unavailable',service:'onelaser-workos-api'}); }
     return {status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false};
   });
-  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:integrations.ai?'configured':'not_integrated',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
+  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?integrations.bot:integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
   const attempts=new Map<string,{count:number;until:number}>();
   app.post('/auth/dev-login',async(req,reply)=>{
     if(!devEnabled) deny(404,'DEV_LOGIN_DISABLED','Development login is disabled');

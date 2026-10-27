@@ -109,6 +109,21 @@ CREATE TABLE IF NOT EXISTS ai_evaluations (
  created_by text NOT NULL REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(task_id,submission_version,model,input_hash)
 );
+CREATE TABLE IF NOT EXISTS ai_review_jobs (
+ id text PRIMARY KEY, org_id text NOT NULL, task_id text NOT NULL REFERENCES tasks(id),
+ task_version integer NOT NULL, submission_version integer NOT NULL, requested_by text NOT NULL REFERENCES users(id),
+ input_hash text NOT NULL, input_payload jsonb NOT NULL,
+ status text NOT NULL CHECK(status IN ('dispatching','pending','dispatch_unknown','failed','leased','completed','expired','superseded')),
+ error_code text, lease_hash text, lease_expires_at timestamptz, result_hash text,
+ evaluation_id text REFERENCES ai_evaluations(id), retry_of text UNIQUE REFERENCES ai_review_jobs(id),
+ created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ai_review_job_current_idx ON ai_review_jobs(task_id,submission_version,input_hash) WHERE status<>'superseded';
+CREATE INDEX IF NOT EXISTS ai_review_job_scope_idx ON ai_review_jobs(org_id,task_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS bot_dispatch_budgets (
+ org_id text NOT NULL, hour_start timestamptz NOT NULL, attempts integer NOT NULL CHECK(attempts BETWEEN 1 AND 10),
+ PRIMARY KEY(org_id,hour_start)
+);
 CREATE TABLE IF NOT EXISTS notification_requests (
  org_id text NOT NULL, requested_by text NOT NULL REFERENCES users(id), request_key text NOT NULL,
  payload_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(org_id,requested_by,request_key)

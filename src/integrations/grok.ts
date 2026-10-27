@@ -19,6 +19,27 @@ export type EvaluationResult = z.infer<typeof evaluationSchema>;
 export class AiIntegrationError extends Error {
   constructor(public code: 'AI_UPSTREAM_FAILED' | 'AI_INVALID_OUTPUT', public status = 502) { super(code); }
 }
+export const reviewSources = (input:ReviewInput) => [
+  {id:`submission:${input.submission.id}:title`,text:input.submission.title},
+  {id:`submission:${input.submission.id}:description`,text:input.submission.description}
+];
+export const reviewInputHash = (input:ReviewInput) => createHash('sha256').update(JSON.stringify(input)).digest('hex');
+/** Both model API and Bot results must pass the same source and quotation checks. */
+export function validateEvaluation(input:ReviewInput,output:unknown):EvaluationResult {
+  try {
+    const result=evaluationSchema.parse(output),sources=reviewSources(input);
+    if(result.criteria.length!==input.criteria.length)throw new Error('Missing criteria');
+    const ids=new Set<string>(); const sourceMap=new Map(sources.map(s=>[s.id,s.text]));
+    for(const criterion of result.criteria){
+      if(!input.criteria.some((_,i)=>criterion.criterionId===`C${i+1}`)||ids.has(criterion.criterionId))throw new Error('Unknown or duplicate criterion');
+      ids.add(criterion.criterionId);
+      if(criterion.evidenceRefs.length!==criterion.quotes.length)throw new Error('Mismatched evidence');
+      if(criterion.finding!=='insufficient_evidence'&&!criterion.evidenceRefs.length)throw new Error('Unsupported finding');
+      criterion.evidenceRefs.forEach((id,i)=>{if(!sourceMap.get(id)?.includes(criterion.quotes[i]))throw new Error('Fabricated evidence');});
+    }
+    return result;
+  } catch { throw new AiIntegrationError('AI_INVALID_OUTPUT'); }
+}
 export class GrokReviewer {
   readonly model: string;
   private endpoint: string;
@@ -28,12 +49,9 @@ export class GrokReviewer {
     this.endpoint = base.toString().replace(/\/$/,'') + '/chat/completions';
     this.model = config.model;
   }
-  inputHash(input: ReviewInput) { return createHash('sha256').update(JSON.stringify(input)).digest('hex'); }
+  inputHash(input: ReviewInput) { return reviewInputHash(input); }
   async assess(input: ReviewInput): Promise<EvaluationResult> {
-    const sources = [
-      {id:`submission:${input.submission.id}:title`,text:input.submission.title},
-      {id:`submission:${input.submission.id}:description`,text:input.submission.description}
-    ];
+    const sources = reviewSources(input);
     const schema = {
       type:'object',additionalProperties:false,
       required:['summary','criteria','missingEvidence','uncertainties','humanReviewRequired'],
@@ -70,18 +88,6 @@ export class GrokReviewer {
       if(error instanceof AiIntegrationError)throw error;
       throw new AiIntegrationError('AI_UPSTREAM_FAILED');
     }
-    try {
-      const result=evaluationSchema.parse(parsed);
-      if(result.criteria.length!==input.criteria.length)throw new Error('Missing criteria');
-      const ids=new Set<string>(); const sourceMap=new Map(sources.map(s=>[s.id,s.text]));
-      for(const criterion of result.criteria){
-        if(!input.criteria.some((_,i)=>criterion.criterionId===`C${i+1}`)||ids.has(criterion.criterionId))throw new Error('Unknown or duplicate criterion');
-        ids.add(criterion.criterionId);
-        if(criterion.evidenceRefs.length!==criterion.quotes.length)throw new Error('Mismatched evidence');
-        if(criterion.finding!=='insufficient_evidence'&&!criterion.evidenceRefs.length)throw new Error('Unsupported finding');
-        criterion.evidenceRefs.forEach((id,i)=>{if(!sourceMap.get(id)?.includes(criterion.quotes[i]))throw new Error('Fabricated evidence');});
-      }
-      return result;
-    } catch { throw new AiIntegrationError('AI_INVALID_OUTPUT'); }
+    return validateEvaluation(input,parsed);
   }
 }

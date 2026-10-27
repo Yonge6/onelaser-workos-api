@@ -30,6 +30,7 @@ services:
       SEED_DEMO: 'false'
       WORKOS_TEAM_MODE: company
       WORKOS_TEAM_NAME: OneLaser
+      AI_REVIEW_MODE: ${AI_REVIEW_MODE:-bot}
     ports:
       - '127.0.0.1:${WORKOS_HTTP_PORT:-8088}:10000'
 volumes:

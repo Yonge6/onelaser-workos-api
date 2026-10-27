@@ -23,6 +23,8 @@ services:
         value: company
       - key: WORKOS_TEAM_NAME
         value: OneLaser
+      - key: AI_REVIEW_MODE
+        value: bot
       - key: DATABASE_URL
         fromDatabase:
           name: onelaser-workos-db
@@ -37,14 +39,13 @@ services:
         sync: false
       - key: DINGTALK_MANAGER_USER_IDS
         sync: false
-      - key: AI_PROVIDER_API_KEY
-        sync: false
-      - key: AI_MODEL_ID
-        sync: false
-      - key: DINGTALK_AGENT_ID
-        sync: false
       - key: DINGTALK_NOTIFICATIONS_ENABLED
         value: 'false'
+      # Add the GROK_BOT_* credentials in Environment after the independent
+      # Bot routine and scoped MCP connection are ready. Missing settings
+      # disable assessment; they never enable developer authentication.
+      # Optional API fallback: AI_REVIEW_MODE=api, AI_PROVIDER_API_KEY, AI_MODEL_ID.
+      # Optional notifications: DINGTALK_AGENT_ID and the explicit enable switch.
 databases:
   - name: onelaser-workos-db
     plan: 0.1c-256mb

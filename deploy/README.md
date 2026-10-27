@@ -8,7 +8,7 @@
 
 - 全公司约 10 人，`WORKOS_TEAM_MODE=company`，仍限指定钉钉企业和批准部门。
 - 负责人必须明确列入 `DINGTALK_MANAGER_USER_IDS`；首位登录不会获得管理权限。
-- Grok 使用独立模型 API；现有客服 Bot、Zoho 自动化不受影响。
+- 试点优先使用现有 Grok Bot 套餐额度，单独建立 Work OS 评审工作流；现有客服 Bot、Zoho 自动化不受影响。模型 API 作为可选备用，单独计费。
 - 不导入演示数据、不开启开发登录；真实业务内容不保存在浏览器 localStorage。
 - 默认关闭钉钉通知。AI 输出作为核查建议，验收由指定负责人完成。
 
@@ -26,11 +26,17 @@
 | `DINGTALK_CORP_ID` | 批准接入的企业 |
 | `DINGTALK_ALLOWED_DEPARTMENT_IDS` | 明确批准的真实部门 ID，逗号分隔；公司模式仍须指定 |
 | `DINGTALK_MANAGER_USER_IDS` | 明确批准的主管 userId，逗号分隔 |
-| `AI_PROVIDER_API_KEY` | xAI 模型 API 密钥，独立于桌面 Bot |
-| `AI_MODEL_ID` | 当前账号实际可用且支持结构化输出的模型 ID |
+| `AI_REVIEW_MODE` | 模板选择 `bot`；代码默认 `api`。配置缺失时评审保持关闭 |
+| `GROK_BOT_WEBHOOK_URL` / `GROK_BOT_WEBHOOK_SECRET` | 独立 Bot routine 的正式 HTTPS 触发地址与密钥 |
+| `GROK_BOT_WEBHOOK_ALLOWED_HOST` | 逐字核对 routine 显示的实际域名；不接受通配符或本机/私网地址 |
+| `GROK_BOT_WORKER_TOKEN` | 至少 32 个随机字符的专用 MCP 凭据，与 webhook 密钥不同 |
+| `GROK_BOT_ORG_ID` | 允许读取评审作业的企业，默认可读取显式配置的 `DINGTALK_CORP_ID` |
+| `AI_PROVIDER_API_KEY` / `AI_MODEL_ID` | 仅 `api` 模式需要：模型密钥及账号实际支持结构化输出的模型 ID |
 | `DINGTALK_AGENT_ID` | 应用 AgentId，启用工作通知时需要 |
 
-钉钉企业管理员需要为独立应用批准登录身份、企业成员映射、指定部门与成员读取权限；启用通知时再批准工作通知权限。权限名称以企业应用后台当时界面和官方文档为准。应用可见范围限全公司指定成员。模型仅接收本次授权任务的标准与成果文本；不自动读取链接、不发送薪资或全员档案。首次真实验证应使用虚构任务。
+钉钉企业管理员需要为独立应用批准登录身份、企业成员映射、指定部门与成员读取权限；工作通知仍需应用 AgentId 和明确启用。权限名称以企业应用后台当时界面和官方文档为准。应用可见范围限指定成员。模型仅接收本次授权任务的标准与成果文本；不自动读取链接、不发送薪资或全员档案。首次真实验证应使用虚构任务。
+
+Bot 触发和回写的具体步骤见 [Bot 接入说明](../docs/integrations/GROK_BOT_SETUP.md)。先部署基础服务，再在托管平台安全环境变量配置 Bot 集成；模板不要求购买模型 API 额度。评审是异步作业，Webhook 接受请求只代表开始执行，结果通过受控 MCP 工具另行写回。Bot 套餐本身仍有用量限制，不能称为免费或无限量。同账号 Bots 共享云端电脑和登录，独立工作流不能代替服务端权限控制。
 
 ## 自有服务器备选
 
@@ -43,10 +49,10 @@
 
 ## 验收与发布
 
-- CI 必须通过：TypeScript、PGlite、真实 PostgreSQL、Docker 构建、同源 `/api`、安全头和默认关闭身份入口。
+- CI 必须通过：TypeScript、PGlite、真实 PostgreSQL、Docker 构建、同源 `/api`、安全头、默认关闭身份入口和未配置的 Bot 集成。
 - `/healthz` 检查数据库连通性；`/api/capabilities` 显示配置状态。`configured` 仅表示配置完整。`productionReady:false` 保留直到真实租户验收，不应被当作验收结论。
 - 真实钉钉主管和员工登录；未批准企业/部门拒绝，普通员工不能读取他人任务或自行提权；同步停用成员后已有会话失效。
-- 创建 OKR/KR、分配任务、员工提交成果、Grok 返回可核对引用、负责人验收、刷新后仍保留；冲突返回 409，不自动覆盖。
+- 创建 OKR/KR、分配任务、员工提交成果、Grok 返回可核对引用、负责人验收、刷新后仍保留；冲突返回 409，不自动覆盖。Bot 模式另外验证排队、处理、完成、超时/不确定状态、手动重试、租约失效与旧版本拒绝，不以“已触发”冒充分析完成。
 - 中文/English、日夜模式、退出与重新登录检查。主题和语言可存本地；任务与会话不能存 localStorage。
 - 如需通知，先明确批准测试收件人，再设置 `DINGTALK_NOTIFICATIONS_ENABLED=true`。`queued` 表示平台接受请求，不能作为送达凭证。
 - 确认托管数据库备份策略、费用和恢复演练。前端版本由 `frontend-revision.txt` 固定；更新前端后必须修改固定提交并重建镜像，回滚时保持数据库迁移兼容。

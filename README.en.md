@@ -8,7 +8,9 @@ A backend development MVP for employee tasks, OKRs, evidence submissions, and hu
 
 Production packaging: [deployment guide](deploy/README.en.md) · [中文部署说明](deploy/README.md). Docker serves a pinned frontend and the API on one origin. The Render Blueprint and existing-server Compose template do not create paid resources automatically.
 
-**The original GitHub Pages site is a demo deployment.** Its records remain browser-local until a live runtime is deployed and configured on the same origin as this API. All seed records are fictional. DingTalk, Grok assessment and notification adapters are implemented; actual activation requires enterprise authorization, separate model API credentials and deployment configuration. Code and mock tests are not proof of a verified live connection.
+**The original GitHub Pages site is a demo deployment.** Its records remain browser-local until a live runtime is deployed and configured on the same origin as this API. All seed records are fictional. DingTalk, Grok assessment and notification adapters are implemented; actual activation requires enterprise authorization, deployment configuration and credentials for the selected review channel. Code and mock tests are not proof of a verified live connection.
+
+The separate model API remains the default (`AI_REVIEW_MODE=api`). Optional [Grok Bot asynchronous assessment](docs/integrations/GROK_BOT_SETUP.en.md) (`AI_REVIEW_MODE=bot`) uses a dedicated Routine and protected remote MCP pickup/completion tools. Bot mode needs no model API credit; actual account allowance and the live connection still require verification. New dispatches are limited to ten per organization per UTC clock hour, without automatic retries.
 
 ## Run locally
 

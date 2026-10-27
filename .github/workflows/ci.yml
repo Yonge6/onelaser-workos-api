@@ -48,6 +48,7 @@ jobs:
             -e PORT=18689 -e NODE_ENV=production \
             -e APP_PUBLIC_URL=https://workos.example.test \
             -e WORKOS_TEAM_MODE=company \
+            -e AI_REVIEW_MODE=bot \
             -e DATABASE_URL=postgres://workos_ci:ephemeral-ci-password@127.0.0.1:5432/workos_test \
             workos-ci
           node tools/smoke-container.mjs

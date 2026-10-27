@@ -7,10 +7,13 @@ import { deny } from '../errors.js';
 import { visibleObjective, visibleTask, krProgress } from '../domain.js';
 import { DingTalkClient, DingTalkError, type DingTalkProfile } from './dingtalk.js';
 import { AiIntegrationError, GrokReviewer, type ReviewInput } from './grok.js';
+import { GrokBotAdapter } from './grok-bot.js';
+import { registerBotReviewRoutes } from './grok-bot-jobs.js';
 
 export type IntegrationOptions = {
   dingtalk?: Pick<DingTalkClient,'authorizationUrl'|'authenticate'|'listDepartmentUsers'|'sendWorkNotification'>;
   corpId?: string; appPublicUrl?: string; secureCookies?: boolean; ai?: Pick<GrokReviewer,'model'|'inputHash'|'assess'>;
+  aiReviewMode?:'api'|'bot';bot?:GrokBotAdapter;
   notificationsEnabled?: boolean; frontendConnected?: boolean; teamMode?:'company'|'department';allowedDepartmentIds?:string[];teamName?:string; setup?: {dingtalkMissing:string[];aiMissing:string[];notificationMissing:string[]};
 };
 const id=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
@@ -55,9 +58,15 @@ export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOpti
     dingtalk=new DingTalkClient({clientId:env.DINGTALK_CLIENT_ID!,clientSecret:env.DINGTALK_CLIENT_SECRET!,corpId:env.DINGTALK_CORP_ID!,agentId:env.DINGTALK_AGENT_ID,
       allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),managerUserIds:(env.DINGTALK_MANAGER_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),redirectUri:env.DINGTALK_REDIRECT_URI||new URL('/api/auth/dingtalk/callback',publicUrl!).toString()});
   }
-  const key=env.AI_PROVIDER_API_KEY||env.XAI_API_KEY;let ai:GrokReviewer|undefined;
-  if(key&&env.AI_MODEL_ID){ai=new GrokReviewer({apiKey:key,model:env.AI_MODEL_ID,baseUrl:env.AI_PROVIDER_BASE_URL,timeoutMs:Number(env.AI_REVIEW_TIMEOUT_MS)||45000});}
-  return {teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
+  if(env.AI_REVIEW_MODE&&!['api','bot'].includes(env.AI_REVIEW_MODE))throw new Error('Invalid AI review mode');
+  const aiReviewMode=env.AI_REVIEW_MODE==='bot'?'bot':'api';
+  const key=env.AI_PROVIDER_API_KEY||env.XAI_API_KEY;let ai:GrokReviewer|undefined,bot:GrokBotAdapter|undefined;
+  const botOrgId=env.GROK_BOT_ORG_ID||env.DINGTALK_CORP_ID;
+  const botMissing=['GROK_BOT_WEBHOOK_URL','GROK_BOT_WEBHOOK_SECRET','GROK_BOT_WEBHOOK_ALLOWED_HOST','GROK_BOT_WORKER_TOKEN'].filter(name=>!env[name]?.trim());
+  if(!botOrgId?.trim())botMissing.push('GROK_BOT_ORG_ID');
+  if(aiReviewMode==='bot'&&!botMissing.length)bot=new GrokBotAdapter({webhookUrl:env.GROK_BOT_WEBHOOK_URL!,webhookSecret:env.GROK_BOT_WEBHOOK_SECRET!,allowedHost:env.GROK_BOT_WEBHOOK_ALLOWED_HOST!,workerToken:env.GROK_BOT_WORKER_TOKEN!,orgId:botOrgId!});
+  if(aiReviewMode==='api'&&key&&env.AI_MODEL_ID){ai=new GrokReviewer({apiKey:key,model:env.AI_MODEL_ID,baseUrl:env.AI_PROVIDER_BASE_URL,timeoutMs:Number(env.AI_REVIEW_TIMEOUT_MS)||45000});}
+  return {teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,aiReviewMode,bot,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:aiReviewMode==='bot'?botMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
 }
 export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,options:IntegrationOptions){
   const secure=options.secureCookies===true,sessionName=sessionCookieName(secure),nonceName=oauthCookieName(secure);
@@ -73,6 +82,7 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
     let value=limits.get(key);if(!value||value.until<=now){if(limits.size>=2000)deny(429,'RATE_LIMITED','Too many requests; try again later');value={count:0,until:now+windowMs};limits.set(key,value);}
     value.count++;if(value.count>max)deny(429,'RATE_LIMITED','Too many requests; try again later');
   }
+  const botJobs=await registerBotReviewRoutes(app,db,options.aiReviewMode==='bot'?options.bot:undefined,options.appPublicUrl,user=>limited('ai-user:'+user.id,5,60000));
   app.get('/auth/dingtalk/start',async(req,reply)=>{
     limited('oauth:'+req.ip,30,60000);
     if(!options.dingtalk||!options.corpId||!options.appPublicUrl)deny(501,'DINGTALK_NOT_CONFIGURED','Real DingTalk authentication is not integrated');
@@ -144,6 +154,10 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
   const runningAssessments=new Map<string,Promise<unknown>>();
   app.post<{Params:{id:string}}>('/tasks/:id/analyze',async(req,reply)=>{
     const user=currentUser(req),task=await loadTask(db,user,id.parse(req.params.id));
+    if(options.aiReviewMode==='bot'){
+      if(!botJobs)deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');
+      const result=await botJobs.analyze(user,task.id,req.language);return reply.code(result.statusCode).send(result.body);
+    }
     if(!options.ai)deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');
     if(!task.submission_version)deny(400,'EVIDENCE_REQUIRED','Submit evidence before requesting assessment');
     const submission=(await db.query('SELECT * FROM submissions WHERE task_id=$1 AND version=$2',[task.id,task.submission_version])).rows[0];
