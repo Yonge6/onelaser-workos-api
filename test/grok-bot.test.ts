@@ -64,7 +64,10 @@ test('Persisted jobs deduplicate concurrent analyze requests and send only a job
 });
 test('Atomic lease and valid completion share citation validation, are idempotent, cache results and leave human state unchanged',async t=>{
   const h=await harness(t),task=await h.createSubmission(),job=await h.enqueue(task.id);
-  const leased=toolData(await h.rpc('workos_get_review_job',{jobId:job.id}));assert.equal(leased.leaseToken.length,43);assert(!JSON.stringify(leased).includes('m2'));assert.equal(leased.urlContentsFetched,false);
+  const leased=toolData(await h.rpc('workos_get_review_job',{jobId:job.id}));
+  const {leaseToken,...evidencePayload}=leased;
+  // The authorized random lease token can coincidentally contain the short fixture ID.
+  assert.equal(leaseToken.length,43);assert(!JSON.stringify(evidencePayload).includes('m2'));assert.equal(leased.urlContentsFetched,false);
   toolError(await h.rpc('workos_get_review_job',{jobId:job.id}),'BOT_LEASE_ACTIVE',409);
   const result=assessment(leased),args={jobId:job.id,leaseToken:leased.leaseToken,result};
   const completed=toolData(await h.rpc('workos_submit_review',args));assert.equal(completed.status,'completed');assert.equal(completed.idempotent,false);
