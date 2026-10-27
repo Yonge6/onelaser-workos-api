@@ -37,6 +37,17 @@ const zh:Record<string,string>={
   'Key result changed; reload before recording':'关键结果已更新，请重新读取后再记录。',
   'AI evidence assessment is not integrated; use human review':'AI 成果评审尚未接入，请使用人工验收。',
   'Notification delivery is not integrated; no message was sent':'通知发送尚未接入，未发送任何消息。',
-  'Endpoint not found':'未找到该接口。'
+  'Endpoint not found':'未找到该接口。',
+  'Too many requests; try again later':'请求过于频繁，请稍后重试。',
+  'Request origin or security token is invalid':'请求来源或安全令牌无效，请刷新后重试。',
+  'DingTalk could not complete the request':'钉钉请求未完成，请检查授权或稍后重试。',
+  'AI assessment could not be verified; use human review':'AI 评审未能通过验证，请使用人工验收。',
+  'Login expired or could not be verified':'登录已过期或无法验证，请重新发起登录。',
+  'Department synchronization is unavailable':'当前部门暂时无法同步。',
+  'Metric target must differ from baseline in the declared direction':'目标值应按指标方向区别于基准值。',
+  'Submit evidence before requesting assessment':'请先提交成果材料再申请评审。',
+  'A notification recipient is unavailable':'通知接收者不可用，请先同步部门成员。',
+  'Notification is too long; select fewer tasks':'通知内容过长，请减少所选任务。',
+  'This notification key was already used for different content':'该通知请求标识已用于其他内容，请重新确认。'
 };
 export function message(text:string,lang:Language) {return lang==='en'?text:(zh[text]||'请求未能处理，请核对输入或联系管理员。');}

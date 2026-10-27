@@ -123,7 +123,7 @@ test('audit and notification preview stay in scope; integrations explicitly fail
   const audit=(await call('m2','GET','/audit')).json().items;assert.ok(audit.length>0);assert.ok(audit.every((e:any)=>e.owner_id==='m2'));
   const preview=(await call('m2','GET','/notifications/preview')).json();assert.equal(preview.sent,false);assert.ok(preview.items.every((t:any)=>t.owner_id==='m2'));
   const zh=await call('m2','POST','/tasks/t1/analyze',{},'zh'),en=await call('m2','POST','/tasks/t1/analyze',{},'en');assert.equal(zh.statusCode,501);assert.equal(en.statusCode,501);assert.equal(zh.json().error.code,en.json().error.code);assert.match(zh.json().error.message,/尚未接入/);assert.match(en.json().error.message,/not integrated/);
-  assert.equal((await call('m2','POST','/notifications/send',{})).statusCode,501);
+  assert.equal((await call('m2','POST','/notifications/send',{})).statusCode,403);assert.equal((await call('m1','POST','/notifications/send',{})).statusCode,501);
 });
 test('production always disables development login; missing secret rejects startup',async()=>{
   const prod=await buildApp({db,environment:'production',allowDevLogin:true,devLoginSecret:secret,closeDatabase:false});

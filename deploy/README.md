@@ -1,0 +1,54 @@
+# OneLaser Work OS 部署
+
+中文 · [English](README.en.md)
+
+正式入口由托管平台提供 HTTPS 子域名；GitHub Pages 继续作为公开演示。Docker 镜像同时提供固定版本的前端与 `/api`，业务数据进入 PostgreSQL。当前代码与 mock 测试不代表真实钉钉、Grok 或生产部署已经验收。
+
+## 选定配置
+
+- 全公司约 10 人，`WORKOS_TEAM_MODE=company`，仍限指定钉钉企业和批准部门。
+- 负责人必须明确列入 `DINGTALK_MANAGER_USER_IDS`；首位登录不会获得管理权限。
+- Grok 使用独立模型 API；现有客服 Bot、Zoho 自动化不受影响。
+- 不导入演示数据、不开启开发登录；真实业务内容不保存在浏览器 localStorage。
+- 默认关闭钉钉通知。AI 输出作为核查建议，验收由指定负责人完成。
+
+## Render 托管
+
+1. 打开 [创建 Blueprint](https://dashboard.render.com/select-repo?type=blueprint)，选择本后台仓库 `Yonge6/onelaser-workos-api`，使用根目录 `render.yaml`。
+2. 审核将创建的 Web Service、PostgreSQL、区域和实际费用。当前模板使用 Singapore、Web `0.5c-512mb`、数据库 `0.1c-256mb`、1 GB 数据盘。计划 ID 和价格以平台当时界面为准；模板未授权任何扣款。
+3. 在平台安全环境变量中配置下表。不要把凭据放入 GitHub、前端、URL 或聊天。
+4. 部署后获得 `https://<service>.onrender.com`。`APP_PUBLIC_URL` 默认读取平台 `RENDER_EXTERNAL_URL`，无需自有域名。将此地址配置为钉钉首页，并注册回调 `https://<service>.onrender.com/api/auth/dingtalk/callback`。
+5. 完成下面的真实验收后再邀请员工。缺少凭据时页面显示待配置，不能绕过登录使用。
+
+| 配置 | 来源与用途 |
+| --- | --- |
+| `DINGTALK_CLIENT_ID` / `DINGTALK_CLIENT_SECRET` | 独立企业内部应用的凭据 |
+| `DINGTALK_CORP_ID` | 批准接入的企业 |
+| `DINGTALK_ALLOWED_DEPARTMENT_IDS` | 明确批准的真实部门 ID，逗号分隔；公司模式仍须指定 |
+| `DINGTALK_MANAGER_USER_IDS` | 明确批准的主管 userId，逗号分隔 |
+| `AI_PROVIDER_API_KEY` | xAI 模型 API 密钥，独立于桌面 Bot |
+| `AI_MODEL_ID` | 当前账号实际可用且支持结构化输出的模型 ID |
+| `DINGTALK_AGENT_ID` | 应用 AgentId，启用工作通知时需要 |
+
+钉钉企业管理员需要为独立应用批准登录身份、企业成员映射、指定部门与成员读取权限；启用通知时再批准工作通知权限。权限名称以企业应用后台当时界面和官方文档为准。应用可见范围限全公司指定成员。模型仅接收本次授权任务的标准与成果文本；不自动读取链接、不发送薪资或全员档案。首次真实验证应使用虚构任务。
+
+## 自有服务器备选
+
+`deploy/compose.yaml` 包含 PostgreSQL 持久卷和应用，只向本机暴露 `127.0.0.1:8088`。已有 Nginx/Caddy 将正式 HTTPS 来源反代至该端口。GitHub 链接不能替代这台运行服务的主机。
+
+1. 在后台仓库根目录创建 Git 忽略的 `.env.production`，填入批准配置和 `APP_PUBLIC_URL=https://<host>`。
+2. 设置一个强随机 `POSTGRES_PASSWORD`；若写入连接串，使用仅含 URL 安全字符的随机值。
+3. 运行 `docker compose --env-file .env.production -f deploy/compose.yaml up -d --build`。
+4. 数据库卷必须备份，禁止把 `down -v` 当作日常重启。迁移前备份，恢复至独立数据库验证后再切换正式连接。
+
+## 验收与发布
+
+- CI 必须通过：TypeScript、PGlite、真实 PostgreSQL、Docker 构建、同源 `/api`、安全头和默认关闭身份入口。
+- `/healthz` 检查数据库连通性；`/api/capabilities` 显示配置状态。`configured` 仅表示配置完整。`productionReady:false` 保留直到真实租户验收，不应被当作验收结论。
+- 真实钉钉主管和员工登录；未批准企业/部门拒绝，普通员工不能读取他人任务或自行提权；同步停用成员后已有会话失效。
+- 创建 OKR/KR、分配任务、员工提交成果、Grok 返回可核对引用、负责人验收、刷新后仍保留；冲突返回 409，不自动覆盖。
+- 中文/English、日夜模式、退出与重新登录检查。主题和语言可存本地；任务与会话不能存 localStorage。
+- 如需通知，先明确批准测试收件人，再设置 `DINGTALK_NOTIFICATIONS_ENABLED=true`。`queued` 表示平台接受请求，不能作为送达凭证。
+- 确认托管数据库备份策略、费用和恢复演练。前端版本由 `frontend-revision.txt` 固定；更新前端后必须修改固定提交并重建镜像，回滚时保持数据库迁移兼容。
+
+此阶段不自动作留任、解雇或薪资决定；现有证据与人工验收记录可供主管查看。

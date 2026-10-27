@@ -1,0 +1,10 @@
+.git
+node_modules
+build
+.env
+.env.*
+.runtime
+coverage
+qa
+public
+*.log

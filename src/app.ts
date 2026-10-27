@@ -2,13 +2,13 @@ import Fastify, { type FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import type { Database, Queryable } from './db.js';
-import { hash, issueSession, resolveSession, sameSecret, type User } from './auth.js';
+import { cookie, hash, issueSession, readCookie, resolveSession, sameSecret, sessionCookieName, type User } from './auth.js';
 import { visibleObjective, visibleTask, krProgress } from './domain.js';
 import { languageFrom, message, type Language } from './i18n.js';
+import { ApiError, deny } from './errors.js';
+import { registerIntegrationRoutes, type IntegrationOptions } from './integrations/routes.js';
 
-declare module 'fastify' { interface FastifyRequest { actor: User | null; language: Language } }
-class ApiError extends Error { constructor(public status: number, public code: string, message: string) { super(message); } }
-const deny = (status: number, code: string, message: string): never => { throw new ApiError(status,code,message); };
+declare module 'fastify' { interface FastifyRequest { actor: User | null; language: Language; sessionToken: string | null; cookieAuthenticated: boolean } }
 const identifier = z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
 const expectedVersion = z.number().int().min(1);
 const evidenceUrl = z.string().max(2000).url().refine(value => {
@@ -22,7 +22,7 @@ const taskInput = z.object({
 const submissionInput = z.object({ expectedVersion, title:z.string().trim().min(3).max(200), description:z.string().trim().min(10).max(30000), evidenceUrl:evidenceUrl.optional() }).strict();
 const reviewInput = z.object({ expectedVersion, submissionVersion:z.number().int().min(1), decision:z.enum(['accept','return']), quality:z.number().int().min(0).max(100).optional(), note:z.string().trim().min(5).max(4000), verifiedCurrentSubmission:z.boolean().optional() }).strict();
 const measurementInput = z.object({ expectedVersion, actual:z.number().finite(), source:z.string().trim().min(3).max(2000), note:z.string().trim().min(5).max(4000) }).strict();
-export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean };
+export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean; integrations?:IntegrationOptions };
 
 function actor(req: FastifyRequest): User { return req.actor || deny(401,'UNAUTHENTICATED','Authentication is required'); }
 function scope(user: User) { return user.role === 'manager' ? ['org_id=$1 AND department_id=$2',[user.org_id,user.department_id]] as const : ['org_id=$1 AND owner_id=$2',[user.org_id,user.id]] as const; }
@@ -48,13 +48,25 @@ export async function buildApp(options:AppOptions) {
   const app=Fastify({logger:false,bodyLimit:128*1024,trustProxy:false});
   app.decorateRequest('actor',null);
   app.decorateRequest('language','zh');
+  app.decorateRequest('sessionToken',null);
+  app.decorateRequest('cookieAuthenticated',false);
+  const integrations={...options.integrations,secureCookies:environment==='production'||options.integrations?.secureCookies===true};
   const publicPaths=new Set(['/health','/capabilities','/auth/dev-login','/auth/dingtalk/start','/auth/dingtalk/callback']);
   app.addHook('onRequest',async(req,reply)=>{
     req.language=languageFrom(req.headers['accept-language']);
     reply.header('Content-Language',req.language).header('Cache-Control','no-store').header('X-Content-Type-Options','nosniff').header('Referrer-Policy','no-referrer');
     if(publicPaths.has(req.url.split('?')[0])) return;
-    req.actor=await resolveSession(db,req.headers.authorization);
+    const cookieToken=readCookie(req.headers.cookie,sessionCookieName(integrations.secureCookies));
+    const token=req.headers.authorization?(req.headers.authorization.startsWith('Bearer ')?req.headers.authorization.slice(7):undefined):cookieToken;
+    req.sessionToken=token||null;req.cookieAuthenticated=!req.headers.authorization&&!!cookieToken;
+    req.actor=await resolveSession(db,token?'Bearer '+token:undefined);
     if(!req.actor) deny(401,'UNAUTHENTICATED','Authentication is required');
+    if(req.cookieAuthenticated&&!['GET','HEAD','OPTIONS'].includes(req.method)){
+      if(req.headers.origin&&req.headers.origin!==new URL(integrations.appPublicUrl||'http://localhost').origin)deny(403,'CSRF_INVALID','Request origin or security token is invalid');
+      const supplied=req.headers['x-csrf-token'];
+      const row=(await db.query('SELECT csrf_token FROM sessions WHERE token_hash=$1',[hash(token!)])).rows[0];
+      if(typeof supplied!=='string'||!row?.csrf_token||!sameSecret(supplied,row.csrf_token))deny(403,'CSRF_INVALID','Request origin or security token is invalid');
+    }
   });
   app.setErrorHandler((error,req,reply)=>{
     if(error instanceof ZodError) return reply.code(400).send({error:{code:'VALIDATION_ERROR',message:message('Invalid request data',req.language),fields:error.issues.map(i=>({path:i.path.join('.'),code:i.code,message:message('Invalid value',req.language)}))}});
@@ -64,8 +76,12 @@ export async function buildApp(options:AppOptions) {
     return reply.code(500).send({error:{code:'INTERNAL_ERROR',message:message('The request could not be completed',req.language)}});
   });
   app.setNotFoundHandler((req,reply)=>reply.code(404).send({error:{code:'NOT_FOUND',message:message('Endpoint not found',req.language)}}));
-  app.get('/health',async()=>({status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false}));
-  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:'not_integrated',aiReview:'not_integrated',notificationDelivery:'not_integrated',employeeDecisions:'not_supported',frontendConnected:false}));
+  app.get('/health',async(_req,reply)=>{
+    try { await db.query('SELECT 1'); }
+    catch { return reply.code(503).send({status:'unavailable',service:'onelaser-workos-api'}); }
+    return {status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false};
+  });
+  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:integrations.ai?'configured':'not_integrated',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
   const attempts=new Map<string,{count:number;until:number}>();
   app.post('/auth/dev-login',async(req,reply)=>{
     if(!devEnabled) deny(404,'DEV_LOGIN_DISABLED','Development login is disabled');
@@ -79,9 +95,7 @@ export async function buildApp(options:AppOptions) {
     if(!user) deny(401,'INVALID_CREDENTIALS','Invalid development credentials');
     return issueSession(db,user.id);
   });
-  const unconfiguredAuth=async()=>deny(501,'DINGTALK_NOT_CONFIGURED','Real DingTalk authentication is not integrated');
-  app.get('/auth/dingtalk/start',unconfiguredAuth); app.get('/auth/dingtalk/callback',unconfiguredAuth); app.post('/auth/dingtalk/callback',unconfiguredAuth);
-  app.delete('/auth/session',async req=>{await db.query('DELETE FROM sessions WHERE token_hash=$1',[hash(req.headers.authorization!.slice(7))]);return {revoked:true};});
+  app.delete('/auth/session',async(req,reply)=>{await db.query('DELETE FROM sessions WHERE token_hash=$1',[hash(req.sessionToken!)]);reply.header('Set-Cookie',cookie(sessionCookieName(integrations.secureCookies),'',integrations.secureCookies,0));return {revoked:true};});
   app.get('/me',async req=>actor(req));
   app.get('/tasks',async req=>{
     const user=actor(req),[where,params]=scope(user);
@@ -148,13 +162,12 @@ export async function buildApp(options:AppOptions) {
       await audit(tx,user,'kr.measured',id,{actual:input.actual,source:input.source},kr.owner_id||user.id);return {...updated,progress:krProgress(updated)};
     });return reply.code(201).send(result);
   });
-  app.post<{Params:{id:string}}>('/tasks/:id/analyze',async req=>{await loadTask(db,actor(req),identifier.parse(req.params.id));return deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');});
   app.get('/notifications/preview',async req=>{
     const user=actor(req),[where,params]=scope(user),tasks=(await db.query(`SELECT id,title,status,owner_id,due_at FROM tasks WHERE ${where} AND status<>$3 ORDER BY due_at LIMIT 100`,[...params,'accepted'])).rows;
     return {status:'draft',sent:false,recipient:user.id,items:tasks};
   });
-  app.post('/notifications/send',async req=>{actor(req);return deny(501,'NOTIFICATIONS_NOT_CONFIGURED','Notification delivery is not integrated; no message was sent');});
   app.get('/audit',async req=>{const [where,params]=scope(actor(req));return {items:(await db.query(`SELECT * FROM audit_events WHERE ${where} ORDER BY created_at DESC,id LIMIT 100`,[...params])).rows,limit:100};});
+  await registerIntegrationRoutes(app,db,integrations);
   if(options.closeDatabase!==false) app.addHook('onClose',async()=>db.close());
   return app;
 }

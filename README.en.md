@@ -6,7 +6,9 @@ A backend development MVP for employee tasks, OKRs, evidence submissions, and hu
 
 [Backend repository](https://github.com/Yonge6/onelaser-workos-api) · [Frontend repository](https://github.com/Yonge6/onelaser-workos) · [Frontend demo](https://yonge6.github.io/onelaser-workos/)
 
-**There is no publicly deployed API service at this stage.** The frontend demo still stores its records in browser `localStorage` and is not connected to this API. All seed records are fictional. DingTalk authentication, AI assessment, and notification delivery are not integrated.
+Production packaging: [deployment guide](deploy/README.en.md) · [中文部署说明](deploy/README.md). Docker serves a pinned frontend and the API on one origin. The Render Blueprint and existing-server Compose template do not create paid resources automatically.
+
+**The original GitHub Pages site is a demo deployment.** Its records remain browser-local until a live runtime is deployed and configured on the same origin as this API. All seed records are fictional. DingTalk, Grok assessment and notification adapters are implemented; actual activation requires enterprise authorization, separate model API credentials and deployment configuration. Code and mock tests are not proof of a verified live connection.
 
 ## Run locally
 
@@ -35,7 +37,7 @@ export PGLITE_DATA_DIR=.runtime/pglite
 npm run dev
 ```
 
-`DEV_LOGIN_SECRET` must contain at least 32 characters and must be supplied in the development login request. Do not commit real configuration files, session tokens, or database files. Production mode prohibits development login and demo seeding, and requires a PostgreSQL connection. PGlite is for local development and tests. Real authentication remains unfinished, so this version is not a complete enterprise production backend.
+`DEV_LOGIN_SECRET` must contain at least 32 characters and must be supplied in the development login request. Do not commit real configuration files, session tokens, or database files. Production mode prohibits development login and demo seeding, and requires a PostgreSQL connection. PGlite is for local development and tests. Production acceptance requires real DingTalk configuration and live checks of enterprise membership, CSRF, frontend connectivity and enabled integrations.
 
 ## Fictional accounts
 
@@ -95,13 +97,13 @@ Before submitting evidence or a review, read the task's latest `version` and sen
 
 ## API scope
 
-Business endpoints require a Bearer session, except health, capability information, and authentication entry points.
+Business endpoints require a session, except health, capability information, and authentication entry points. The production browser uses an HttpOnly cookie; Bearer authentication is retained for development examples and controlled tooling.
 
 | Method and path | Current behavior |
 | --- | --- |
 | `GET /health`, `GET /capabilities` | Health and integration capability information |
 | `POST /auth/dev-login` | Explicit development mode only; body contains `userId` and `secret` |
-| `GET /auth/dingtalk/start`, `GET/POST /auth/dingtalk/callback` | Not integrated; returns `501` |
+| `GET /auth/dingtalk/start`, `GET/POST /auth/dingtalk/callback` | Configured OAuth login flow; returns `501` if configuration is missing |
 | `DELETE /auth/session` | Revokes the current session |
 | `GET /me` | Current authenticated user |
 | `GET /tasks`, `GET /tasks/:id` | Tasks and submission records within the personal or department scope |
@@ -110,9 +112,9 @@ Business endpoints require a Bearer session, except health, capability informati
 | `POST /tasks/:id/reviews` | The designated manager accepts the evidence or returns it for revision |
 | `GET /objectives`, `GET /key-results` | Visible objectives, KRs, and business progress |
 | `POST /key-results/:id/measurements` | A manager records an actual value, source, and explanation |
-| `POST /tasks/:id/analyze` | AI is not integrated; returns `501` |
+| `POST /tasks/:id/analyze` | Configured evidence assessment with validated citations; otherwise `501` |
 | `GET /notifications/preview` | Generates an unsent draft for the current visible scope |
-| `POST /notifications/send` | Delivery is not integrated; returns `501` |
+| `POST /notifications/send` | Explicit idempotent manager notifications; `501` when disabled or unconfigured |
 | `GET /audit` | Audit records within the current permission scope |
 
 Evidence submission body:
@@ -159,4 +161,21 @@ The version numbers above only illustrate the relationship between fields. Real 
 
 Set `TEST_DATABASE_URL` to run the same API tests against a test PostgreSQL database. Use a dedicated test database, separate from production data. The PostgreSQL adapter still needs verification in the actual server environment. Passing local PGlite tests does not prove a real PostgreSQL deployment, backup, or restore has passed. Remote CI results are established by the corresponding Actions run.
 
-Before a real pilot, finish DingTalk authentication, frontend/API integration, private file storage and evidence extraction, model citation validation, notification queues, work calendars, recovery drills, and enterprise access acceptance.
+Before a real pilot, verify configured DingTalk permissions and frontend/API connectivity, add private file storage if needed, validate real model output and enabled notifications, establish working calendars, and complete recovery and enterprise access acceptance.
+
+
+## Production integrations
+
+Serve the frontend and API on one HTTPS origin; strip the `/api` prefix at the proxy. Navigate to `/api/auth/dingtalk/start` for login. Short-lived OAuth state is bound to an HttpOnly browser nonce. The server verifies the configured corporation, unionId-to-enterprise-user mapping, active membership and explicit department allowlist. Only IDs listed in `DINGTALK_MANAGER_USER_IDS` become managers; the first login never grants administration.
+
+Sessions use HttpOnly, Secure, SameSite=Lax cookies. Fetch `GET /auth/csrf`, then include `X-CSRF-Token` on writes. Origin, token, user and resource scope are checked server-side. `GET /capabilities` exposes configuration status and missing variable names, never secret values. Configured does not mean a live tenant has passed acceptance.
+
+For a small company, explicitly set `WORKOS_TEAM_MODE=company` to share one workspace among members already validated against the corporation and approved departments. The code defaults to `department`. Original DingTalk department IDs and names remain in identity mappings. Company synchronization loops through real approved department IDs and deduplicates users; it never sends the internal workspace ID to DingTalk. Migrate existing task/objective scope before changing modes after real data exists.
+
+Managers can call `POST /integrations/dingtalk/sync`; absent members are deactivated and existing sessions stop working. `GET /directory` and `GET /departments` supply the authorized members and workspace. `POST /objectives` accepts `{title,level:"personal"|"department",ownerId?}`; `POST /objectives/:id/key-results` accepts `{title,baseline,target,actual?,direction:"increase"|"decrease",unit}`. Employees can create only their own personal objectives. Ordinary department managers cannot create company-wide objectives.
+
+Grok uses a separately approved model API, not an existing customer-support Bot subscription. Only the current task criteria and submitted text are sent; no salary or workforce-wide data is included and URLs are not fetched. Every criterion must appear once; source IDs and verbatim quotes are validated against the exact submission. Failed or stale results remain errors, never zero performance scores. AI does not accept tasks or make personnel decisions. `GET /tasks/:id/evaluations` retains versioned history; managers must still inspect and confirm the actual evidence.
+
+Notification requests accept `{taskIds:[...],idempotencyKey:"UUID"}`. Only managers can notify current-scope task owners. Configure AgentId and explicitly enable `DINGTALK_NOTIFICATIONS_ENABLED=true`. A `queued` response means provider acceptance, not delivery; `sent:false` avoids claiming receipt. Timeouts become `unknown`, and the same idempotency key is not automatically resent.
+
+OAuth/CSRF, company scope, model citations and notification-idempotency tests mock official services. They do not send real notifications or spend real model credits. Live enterprise permissions, model availability, cost, first-user login and actual notification receipt still require deployment acceptance.

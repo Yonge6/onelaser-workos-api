@@ -1,0 +1,30 @@
+{
+    admin off
+    auto_https off
+}
+
+http://:{$PORT:10000} {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://login.dingtalk.com"
+        Cache-Control no-store
+    }
+    handle /healthz {
+        rewrite * /health
+        reverse_proxy 127.0.0.1:3001
+    }
+    handle_path /api/* {
+        reverse_proxy 127.0.0.1:3001
+    }
+    handle /api {
+        redir /api/ 308
+    }
+    handle {
+        root * /app/public
+        file_server
+    }
+}

@@ -1,0 +1,49 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const origin = process.env.SMOKE_ORIGIN || 'http://127.0.0.1:18689';
+let healthy = false;
+for (let attempt = 0; attempt < 60; attempt++) {
+  try {
+    const response = await fetch(origin + '/healthz');
+    if (response.ok) { healthy = true; break; }
+  } catch {}
+  await new Promise(resolve => setTimeout(resolve, 1000));
+}
+assert.ok(healthy, 'Container must start with PostgreSQL and no provider keys');
+const index = await fetch(origin + '/');
+assert.equal(index.status, 200);
+assert.match(index.headers.get('content-security-policy'), /script-src 'self'/);
+assert.equal(index.headers.get('cache-control'), 'no-store');
+assert.equal(index.headers.get('x-frame-options'), 'DENY');
+const html = await index.text();
+for (const asset of ['preferences.js', 'runtime-config.js', 'api-client.js', 'live-app.js']) {
+  assert.ok(html.includes(asset), 'Missing production client asset: ' + asset);
+  assert.equal((await fetch(origin + '/' + asset)).status, 200);
+}
+const runtime = await (await fetch(origin + '/runtime-config.js')).text();
+assert.match(runtime, /mode:'live'/);
+assert.match(runtime, /apiBase:'\/api'/);
+assert.doesNotMatch(runtime, /apiKey|secret|password|token/i);
+const build = await (await fetch(origin + '/build-info.json')).json();
+const pinned = (await readFile(new URL('../deploy/frontend-revision.txt', import.meta.url), 'utf8')).trim();
+assert.equal(build.frontendCommit, pinned);
+const health = await (await fetch(origin + '/api/health')).json();
+assert.equal(health.database, 'postgres');
+const capabilities = await (await fetch(origin + '/api/capabilities')).json();
+assert.equal(capabilities.devLogin, false);
+assert.equal(capabilities.frontendConnected, true);
+assert.equal(capabilities.teamMode, 'company');
+assert.equal(capabilities.auth.loginEnabled, false);
+assert.equal(capabilities.aiReview, 'not_integrated');
+assert.equal(capabilities.employeeDecisions, 'not_supported');
+assert.ok(capabilities.setup.dingtalkMissing.includes('DINGTALK_CLIENT_SECRET'));
+for (const path of ['/api/tasks', '/api/directory', '/api/objectives', '/api/auth/csrf']) {
+  assert.equal((await fetch(origin + path)).status, 401, path + ' must require login');
+}
+assert.equal((await fetch(origin + '/api/auth/dev-login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })).status, 404);
+assert.equal((await fetch(origin + '/api/auth/dingtalk/start', {redirect:'manual'})).status, 501);
+for (const path of ['/.env', '/src/server.ts', '/deploy/Caddyfile']) {
+  assert.equal((await fetch(origin + path)).status, 404);
+}
+console.log('Same-origin container smoke passed: pinned live frontend, PostgreSQL API, CSP, and fail-closed authentication. No provider requests sent.');

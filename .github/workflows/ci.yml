@@ -40,3 +40,20 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://workos_ci:ephemeral-ci-password@127.0.0.1:5432/workos_test
       - run: npm run build
+      - name: Build production image with pinned frontend
+        run: docker build -t workos-ci .
+      - name: Check same-origin production container
+        run: |
+          docker run --detach --name workos-smoke --network host \
+            -e PORT=18689 -e NODE_ENV=production \
+            -e APP_PUBLIC_URL=https://workos.example.test \
+            -e WORKOS_TEAM_MODE=company \
+            -e DATABASE_URL=postgres://workos_ci:ephemeral-ci-password@127.0.0.1:5432/workos_test \
+            workos-ci
+          node tools/smoke-container.mjs
+      - name: Container diagnostics
+        if: failure()
+        run: docker logs workos-smoke 2>/dev/null || true
+      - name: Stop smoke container
+        if: always()
+        run: docker rm -f workos-smoke 2>/dev/null || true

@@ -1,0 +1,57 @@
+# Creates paid infrastructure only after the account holder reviews and applies it.
+services:
+  - type: web
+    name: onelaser-workos
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore
+    repo: https://github.com/Yonge6/onelaser-workos-api
+    branch: main
+    dockerfilePath: ./Dockerfile
+    autoDeployTrigger: checksPass
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ALLOW_DEV_LOGIN
+        value: 'false'
+      - key: SEED_DEMO
+        value: 'false'
+      - key: FRONTEND_CONNECTED
+        value: 'true'
+      - key: WORKOS_TEAM_MODE
+        value: company
+      - key: WORKOS_TEAM_NAME
+        value: OneLaser
+      - key: DATABASE_URL
+        fromDatabase:
+          name: onelaser-workos-db
+          property: connectionString
+      - key: DINGTALK_CLIENT_ID
+        sync: false
+      - key: DINGTALK_CLIENT_SECRET
+        sync: false
+      - key: DINGTALK_CORP_ID
+        sync: false
+      - key: DINGTALK_ALLOWED_DEPARTMENT_IDS
+        sync: false
+      - key: DINGTALK_MANAGER_USER_IDS
+        sync: false
+      - key: AI_PROVIDER_API_KEY
+        sync: false
+      - key: AI_MODEL_ID
+        sync: false
+      - key: DINGTALK_AGENT_ID
+        sync: false
+      - key: DINGTALK_NOTIFICATIONS_ENABLED
+        value: 'false'
+databases:
+  - name: onelaser-workos-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: '16'
+    diskSizeGB: 1
+    storageAutoscalingEnabled: false
+    databaseName: workos
+    user: workos
+    ipAllowList: []

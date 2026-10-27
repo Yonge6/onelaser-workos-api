@@ -6,7 +6,7 @@
 
 [后台仓库](https://github.com/Yonge6/onelaser-workos-api) · [前端仓库](https://github.com/Yonge6/onelaser-workos) · [前端交互演示](https://yonge6.github.io/onelaser-workos/)
 
-**当前没有公开部署的 API 服务。** 前端演示仍将记录保存在浏览器 `localStorage`，尚未调用本仓库接口。虚构数据仅用于研发验证；钉钉身份认证、AI 评审和通知发送尚未接入。
+**原 GitHub Pages 站点仍为演示部署。** 只有部署同源 live runtime 并配置后才调用本仓库 API；原演示记录仍保存在浏览器 `localStorage`。虚构数据仅用于研发验证。钉钉登录、Grok 服务端评审和通知适配器已实现；实际启用需企业应用授权、模型 API 密钥和部署配置，不能据代码实现声称线上授权已经通过。
 
 ## 本地运行
 
@@ -35,7 +35,7 @@ export PGLITE_DATA_DIR=.runtime/pglite
 npm run dev
 ```
 
-`DEV_LOGIN_SECRET` 至少 32 字符，开发登录需要同时提交该值。不要提交真实配置文件、会话令牌或数据库文件。`NODE_ENV=production` 禁止开发登录；生产配置必须提供 PostgreSQL 连接，不能用 PGlite 作为多人生产数据库。真实身份接入尚未完成，因此此版本不是可直接投入企业使用的完整后台。
+`DEV_LOGIN_SECRET` 至少 32 字符，开发登录需要同时提交该值。不要提交真实配置文件、会话令牌或数据库文件。`NODE_ENV=production` 禁止开发登录；生产配置必须提供 PostgreSQL 连接，不能用 PGlite 作为多人生产数据库。生产部署必须配置真实钉钉身份，并完成企业成员、CSRF、前后端及模型/通知实测后验收。
 
 ## 虚构账号
 
@@ -94,13 +94,13 @@ curl --fail --silent --show-error http://127.0.0.1:3001/tasks \
 
 ## API 范围
 
-除健康、能力说明和身份入口外，业务接口均需要 Bearer 会话。
+除健康、能力说明和身份入口外，业务接口均需要会话。正式网页使用 HttpOnly Cookie；Bearer 仅用于开发示例和受控工具。
 
 | 方法与路径 | 当前行为 |
 | --- | --- |
 | `GET /health`、`GET /capabilities` | 健康状态与接入能力说明 |
 | `POST /auth/dev-login` | 仅显式启用的开发模式可用，正文为 `userId`、`secret` |
-| `GET /auth/dingtalk/start`、`GET/POST /auth/dingtalk/callback` | 尚未接入，返回 `501` |
+| `GET /auth/dingtalk/start`、`GET/POST /auth/dingtalk/callback` | 配置后启动受控 OAuth 流程；缺配置返回 `501` |
 | `DELETE /auth/session` | 撤销当前会话 |
 | `GET /me` | 当前用户身份 |
 | `GET /tasks`、`GET /tasks/:id` | 按本人或部门范围读取任务及成果记录 |
@@ -109,9 +109,9 @@ curl --fail --silent --show-error http://127.0.0.1:3001/tasks \
 | `POST /tasks/:id/reviews` | 指定负责人验收通过或退回补充 |
 | `GET /objectives`、`GET /key-results` | 可见目标、KR 与业务进度 |
 | `POST /key-results/:id/measurements` | 负责人记录实际值、来源和说明 |
-| `POST /tasks/:id/analyze` | 模型尚未接入，返回 `501` |
+| `POST /tasks/:id/analyze` | 配置后进行有引用的文本证据评审；缺配置返回 `501` |
 | `GET /notifications/preview` | 生成当前可见范围的本地草稿，不发送 |
-| `POST /notifications/send` | 发送通道尚未接入，返回 `501` |
+| `POST /notifications/send` | 负责人明确触发的幂等通知；缺配置或开关关闭返回 `501` |
 | `GET /audit` | 按权限范围读取操作记录 |
 
 成果提交正文：
@@ -156,4 +156,25 @@ curl --fail --silent --show-error http://127.0.0.1:3001/tasks \
 
 `npm test` 使用 Fastify 注入请求和 PGlite SQL 数据库，覆盖身份、权限、版本冲突、人工验收与 KR 独立性等接口行为。`npm run typecheck` 检查 TypeScript，`npm run build` 生成可运行代码。
 
-设置 `TEST_DATABASE_URL` 可让同一组接口测试连接测试用 PostgreSQL；测试库必须独立于正式业务库。生产 PostgreSQL 适配器仍需在实际服务器完成联调；本地 PGlite 测试不能证明真实 PostgreSQL 部署、备份或恢复已经通过。远程 CI 的结果以对应 Actions 运行记录为准。正式试点还需完成钉钉登录、前后端联调、文件存储与证据解析、模型输出引用校验、通知队列、工作日历、恢复演练和企业权限验收。
+设置 `TEST_DATABASE_URL` 可让同一组接口测试连接测试用 PostgreSQL；测试库必须独立于正式业务库。生产 PostgreSQL 适配器仍需在实际服务器完成联调；本地 PGlite 测试不能证明真实 PostgreSQL 部署、备份或恢复已经通过。远程 CI 的结果以对应 Actions 运行记录为准。正式试点还需核验真实钉钉授权、前后端联调、按需添加私有文件存储与证据解析、实测模型引用、启用的通知通道、工作日历、恢复演练和企业权限。
+
+
+## 生产集成
+
+完整部署步骤见 [部署说明](deploy/README.md) · [English deployment guide](deploy/README.en.md)。Docker 镜像固定前端提交，在同一来源提供网页和 `/api`；Render Blueprint 和自有服务器 Compose 均已提供。部署文件不会自动创建收费资源。
+
+前端与 API 使用同一 HTTPS 来源，反代 `/api` 时去除前缀。网页登录直接进入 `/api/auth/dingtalk/start`。服务端使用短时 OAuth state 与 HttpOnly 浏览器 nonce，随后按指定企业验证个人 unionId、企业 userId、有效成员和批准部门。只有 `DINGTALK_MANAGER_USER_IDS` 中明确的账号获得负责人角色；不会把首个登录者自动升级。
+
+登录返回 HttpOnly、Secure、SameSite=Lax 会话 Cookie，不把会话放进地址或浏览器存储。前端先读取 `GET /auth/csrf`，写请求带 `X-CSRF-Token`；服务端校验来源、令牌、当前用户和资源权限。`GET /capabilities` 只显示配置状态及缺少的配置名，不返回密钥。配置完整不等于已经在真实租户验收。
+
+十来人的公司可显式设置 `WORKOS_TEAM_MODE=company`，让已通过企业与部门白名单验证的成员共用工作区；代码默认仍是 `department`。原钉钉部门 ID 和名称保留在身份映射中。公司模式同步逐个读取允许的真实部门并去重，不把内部工作区 ID 发给钉钉。已有业务数据后不要直接切换模式，应先迁移任务与目标范围。
+
+负责人可调用 `POST /integrations/dingtalk/sync` 同步批准范围，缺席成员会停用，从而立即失去已有会话权限。`GET /directory`、`GET /departments` 提供允许的人员与工作区；员工只可建本人个人目标，负责人可建当前工作区目标。
+
+`POST /objectives` 正文为 `{title,level:"personal"|"department",ownerId?}`；`POST /objectives/:id/key-results` 为 `{title,baseline,target,actual?,direction:"increase"|"decrease",unit}`。普通部门角色不能创建全企业公司级目标，避免扩大跨工作区权限。
+
+Grok 通过公司批准的模型 API 调用，独立于现有客服 Grok Bot。评审只发送当前任务标准和当前提交的文本，不发送薪资/全员资料，不自动抓取 URL。服务端验证所有标准恰好出现一次、引用 ID 属于本次提交、引用原文实际存在。失败或旧版本返回待处理错误，不填低分；AI 不改变任务验收状态、不作人事判断。`GET /tasks/:id/evaluations` 保留版本历史，负责人仍需实际核对并验收。
+
+通知请求为 `{taskIds:[...],idempotencyKey:"UUID"}`，仅负责人可发给当前范围内的任务本人。需另开 `DINGTALK_NOTIFICATIONS_ENABLED=true` 并配置 AgentId；未开启不会发送。返回 `queued` 只表示钉钉接受发送请求，`sent:false` 不冒充已送达；超时标为 `unknown`，同一幂等键不自动重发。不得将通知预览当作真实送达。
+
+新增 OAuth/CSRF、企业范围、Grok 引用和通知幂等测试使用 mock 官方服务；这些测试不会发送真实钉钉消息或消耗真实模型额度。真实授权、模型可用性、API 费用、用户首次登录和通知接收仍需上线验证。

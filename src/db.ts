@@ -12,7 +12,7 @@ export interface Database extends Queryable {
 }
 export async function createDatabase(options: { connectionString?: string; dataDir?: string } = {}): Promise<Database> {
   if (options.connectionString) {
-    const pool = new pg.Pool({ connectionString: options.connectionString, max: 5 });
+    const pool = new pg.Pool({ connectionString: options.connectionString, max: 5, connectionTimeoutMillis: 5000, query_timeout: 10000 });
     const wrap = (client: pg.Pool | pg.PoolClient): Queryable => ({
       async query<T>(sql: string, params: unknown[] = []) { return { rows: (await client.query(sql, params)).rows as T[] }; }
     });
@@ -47,6 +47,21 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE TABLE IF NOT EXISTS sessions (
  token_hash text PRIMARY KEY, user_id text NOT NULL REFERENCES users(id), expires_at timestamptz NOT NULL
+);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS csrf_token text;
+CREATE TABLE IF NOT EXISTS departments (
+ org_id text NOT NULL, id text NOT NULL, external_id text NOT NULL, name text NOT NULL,
+ PRIMARY KEY(org_id,id)
+);
+CREATE TABLE IF NOT EXISTS external_identities (
+ provider text NOT NULL, corp_id text NOT NULL, external_user_id text NOT NULL,
+ union_id text NOT NULL, user_id text NOT NULL REFERENCES users(id),
+ PRIMARY KEY(provider,corp_id,external_user_id), UNIQUE(provider,corp_id,user_id)
+);
+ALTER TABLE external_identities ADD COLUMN IF NOT EXISTS external_department_id text;
+ALTER TABLE external_identities ADD COLUMN IF NOT EXISTS external_department_name text;
+CREATE TABLE IF NOT EXISTS oauth_states (
+ state_hash text PRIMARY KEY, nonce_hash text NOT NULL, expires_at timestamptz NOT NULL
 );
 CREATE TABLE IF NOT EXISTS objectives (
  id text PRIMARY KEY, org_id text NOT NULL, department_id text,
@@ -87,6 +102,23 @@ CREATE TABLE IF NOT EXISTS audit_events (
  id text PRIMARY KEY, org_id text NOT NULL, department_id text NOT NULL, owner_id text NOT NULL,
  actor_id text NOT NULL REFERENCES users(id), action text NOT NULL, object_id text NOT NULL,
  details jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS ai_evaluations (
+ id text PRIMARY KEY, task_id text NOT NULL REFERENCES tasks(id), submission_version integer NOT NULL,
+ status text NOT NULL, model text NOT NULL, input_hash text NOT NULL, result jsonb NOT NULL,
+ created_by text NOT NULL REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(task_id,submission_version,model,input_hash)
+);
+CREATE TABLE IF NOT EXISTS notification_requests (
+ org_id text NOT NULL, requested_by text NOT NULL REFERENCES users(id), request_key text NOT NULL,
+ payload_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(org_id,requested_by,request_key)
+);
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+ id text PRIMARY KEY, org_id text NOT NULL, department_id text NOT NULL,
+ requested_by text NOT NULL REFERENCES users(id), request_key text NOT NULL, recipient_id text NOT NULL REFERENCES users(id),
+ payload_hash text NOT NULL, status text NOT NULL CHECK(status IN ('pending','queued','unknown')),
+ provider_task_id text, created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(org_id,requested_by,request_key,recipient_id)
 );
 CREATE INDEX IF NOT EXISTS task_scope_idx ON tasks(org_id, department_id, owner_id);
 CREATE INDEX IF NOT EXISTS audit_scope_idx ON audit_events(org_id, department_id, owner_id);
