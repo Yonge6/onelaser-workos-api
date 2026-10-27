@@ -1,0 +1,42 @@
+name: API checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: workos_ci
+          POSTGRES_PASSWORD: ephemeral-ci-password
+          POSTGRES_DB: workos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workos_ci -d workos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Test with embedded PostgreSQL
+        run: npm test
+      - name: Test PostgreSQL adapter
+        run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://workos_ci:ephemeral-ci-password@127.0.0.1:5432/workos_test
+      - run: npm run build

@@ -1,0 +1,160 @@
+import Fastify, { type FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { z, ZodError } from 'zod';
+import type { Database, Queryable } from './db.js';
+import { hash, issueSession, resolveSession, sameSecret, type User } from './auth.js';
+import { visibleObjective, visibleTask, krProgress } from './domain.js';
+import { languageFrom, message, type Language } from './i18n.js';
+
+declare module 'fastify' { interface FastifyRequest { actor: User | null; language: Language } }
+class ApiError extends Error { constructor(public status: number, public code: string, message: string) { super(message); } }
+const deny = (status: number, code: string, message: string): never => { throw new ApiError(status,code,message); };
+const identifier = z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
+const expectedVersion = z.number().int().min(1);
+const evidenceUrl = z.string().max(2000).url().refine(value => {
+  const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password;
+}, 'Only HTTPS URLs without embedded credentials are allowed');
+const taskInput = z.object({
+  title: z.string().trim().min(3).max(200), description: z.string().trim().min(1).max(10000),
+  ownerId: identifier, reviewerId: identifier.optional(), criteria: z.array(z.string().trim().min(1).max(1000)).min(1).max(20),
+  dueAt: z.string().datetime({ offset: true }), krId: identifier.optional()
+}).strict();
+const submissionInput = z.object({ expectedVersion, title:z.string().trim().min(3).max(200), description:z.string().trim().min(10).max(30000), evidenceUrl:evidenceUrl.optional() }).strict();
+const reviewInput = z.object({ expectedVersion, submissionVersion:z.number().int().min(1), decision:z.enum(['accept','return']), quality:z.number().int().min(0).max(100).optional(), note:z.string().trim().min(5).max(4000), verifiedCurrentSubmission:z.boolean().optional() }).strict();
+const measurementInput = z.object({ expectedVersion, actual:z.number().finite(), source:z.string().trim().min(3).max(2000), note:z.string().trim().min(5).max(4000) }).strict();
+export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean };
+
+function actor(req: FastifyRequest): User { return req.actor || deny(401,'UNAUTHENTICATED','Authentication is required'); }
+function scope(user: User) { return user.role === 'manager' ? ['org_id=$1 AND department_id=$2',[user.org_id,user.department_id]] as const : ['org_id=$1 AND owner_id=$2',[user.org_id,user.id]] as const; }
+async function loadTask(tx: Queryable, user: User, id: string, lock=false) {
+  const result = await tx.query('SELECT * FROM tasks WHERE id=$1' + (lock?' FOR UPDATE':''),[id]);
+  const task = result.rows[0]; if (!visibleTask(user,task)) deny(404,'NOT_FOUND','Task not found'); return task;
+}
+async function loadKr(tx: Queryable, id: string, lock=false) {
+  return (await tx.query('SELECT k.*,o.org_id,o.department_id,o.owner_id,o.level FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE k.id=$1' + (lock?' FOR UPDATE OF k':''),[id])).rows[0];
+}
+async function audit(tx: Queryable, user:User, action:string, objectId:string, details:unknown, ownerId=user.id, departmentId=user.department_id) {
+  await tx.query('INSERT INTO audit_events(id,org_id,department_id,owner_id,actor_id,action,object_id,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[randomUUID(),user.org_id,departmentId,ownerId,user.id,action,objectId,JSON.stringify(details)]);
+}
+async function taskDetail(db:Queryable, task:any) {
+  const submissions=(await db.query('SELECT * FROM submissions WHERE task_id=$1 ORDER BY version',[task.id])).rows;
+  const reviews=(await db.query('SELECT * FROM reviews WHERE task_id=$1 ORDER BY created_at,id',[task.id])).rows;
+  return {...task,submissions,reviews,currentReview:task.status==='accepted' ? [...reviews].reverse().find(r=>r.submission_version===task.submission_version&&r.decision==='accept') || null : null};
+}
+export async function buildApp(options:AppOptions) {
+  const {db}=options, environment=options.environment || 'development';
+  const devEnabled=options.allowDevLogin===true && environment!=='production';
+  if(devEnabled && (options.devLoginSecret?.length || 0)<32) throw new Error('DEV_LOGIN_SECRET must contain at least 32 characters when development login is enabled');
+  const app=Fastify({logger:false,bodyLimit:128*1024,trustProxy:false});
+  app.decorateRequest('actor',null);
+  app.decorateRequest('language','zh');
+  const publicPaths=new Set(['/health','/capabilities','/auth/dev-login','/auth/dingtalk/start','/auth/dingtalk/callback']);
+  app.addHook('onRequest',async(req,reply)=>{
+    req.language=languageFrom(req.headers['accept-language']);
+    reply.header('Content-Language',req.language).header('Cache-Control','no-store').header('X-Content-Type-Options','nosniff').header('Referrer-Policy','no-referrer');
+    if(publicPaths.has(req.url.split('?')[0])) return;
+    req.actor=await resolveSession(db,req.headers.authorization);
+    if(!req.actor) deny(401,'UNAUTHENTICATED','Authentication is required');
+  });
+  app.setErrorHandler((error,req,reply)=>{
+    if(error instanceof ZodError) return reply.code(400).send({error:{code:'VALIDATION_ERROR',message:message('Invalid request data',req.language),fields:error.issues.map(i=>({path:i.path.join('.'),code:i.code,message:message('Invalid value',req.language)}))}});
+    if(error instanceof ApiError) return reply.code(error.status).send({error:{code:error.code,message:message(error.message,req.language)}});
+    if((error as any).statusCode===413) return reply.code(413).send({error:{code:'BODY_TOO_LARGE',message:message('Request body exceeds limit',req.language)}});
+    if((error as any).statusCode===400) return reply.code(400).send({error:{code:'INVALID_JSON',message:message('Invalid JSON request',req.language)}});
+    return reply.code(500).send({error:{code:'INTERNAL_ERROR',message:message('The request could not be completed',req.language)}});
+  });
+  app.setNotFoundHandler((req,reply)=>reply.code(404).send({error:{code:'NOT_FOUND',message:message('Endpoint not found',req.language)}}));
+  app.get('/health',async()=>({status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false}));
+  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:'not_integrated',aiReview:'not_integrated',notificationDelivery:'not_integrated',employeeDecisions:'not_supported',frontendConnected:false}));
+  const attempts=new Map<string,{count:number;until:number}>();
+  app.post('/auth/dev-login',async(req,reply)=>{
+    if(!devEnabled) deny(404,'DEV_LOGIN_DISABLED','Development login is disabled');
+    const now=Date.now(), current=attempts.get(req.ip);
+    if(current&&current.until>now&&current.count>=30) deny(429,'RATE_LIMITED','Too many development login attempts');
+    if(!current||current.until<=now) attempts.set(req.ip,{count:1,until:now+60000}); else current.count++;
+    if(attempts.size>1000) for(const [ip,v] of attempts) if(v.until<=now) attempts.delete(ip);
+    const input=z.object({userId:identifier,secret:z.string().max(512)}).strict().parse(req.body);
+    if(!sameSecret(input.secret,options.devLoginSecret!)) deny(401,'INVALID_CREDENTIALS','Invalid development credentials');
+    const user=(await db.query<User>('SELECT * FROM users WHERE id=$1 AND active=true',[input.userId])).rows[0];
+    if(!user) deny(401,'INVALID_CREDENTIALS','Invalid development credentials');
+    return issueSession(db,user.id);
+  });
+  const unconfiguredAuth=async()=>deny(501,'DINGTALK_NOT_CONFIGURED','Real DingTalk authentication is not integrated');
+  app.get('/auth/dingtalk/start',unconfiguredAuth); app.get('/auth/dingtalk/callback',unconfiguredAuth); app.post('/auth/dingtalk/callback',unconfiguredAuth);
+  app.delete('/auth/session',async req=>{await db.query('DELETE FROM sessions WHERE token_hash=$1',[hash(req.headers.authorization!.slice(7))]);return {revoked:true};});
+  app.get('/me',async req=>actor(req));
+  app.get('/tasks',async req=>{
+    const user=actor(req),[where,params]=scope(user);
+    return {items:(await db.query(`SELECT * FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};
+  });
+  app.get<{Params:{id:string}}>('/tasks/:id',async req=>taskDetail(db,await loadTask(db,actor(req),identifier.parse(req.params.id))));
+  app.post('/tasks',async(req,reply)=>{
+    const user=actor(req),input=taskInput.parse(req.body);
+    if(user.role==='employee'&&input.ownerId!==user.id) deny(403,'FORBIDDEN','Employees can create tasks only for themselves');
+    const result=await db.transaction(async tx=>{
+      const owner=(await tx.query<User>('SELECT * FROM users WHERE id=$1 AND active=true',[input.ownerId])).rows[0];
+      if(!owner||owner.org_id!==user.org_id||owner.department_id!==user.department_id) deny(400,'INVALID_OWNER','Owner must be an active member of the current department');
+      const reviewer=(await tx.query<User>(input.reviewerId?'SELECT * FROM users WHERE id=$1 AND active=true':'SELECT * FROM users WHERE org_id=$1 AND department_id=$2 AND role=$3 AND active=true AND id<>$4 ORDER BY id LIMIT 1',input.reviewerId?[input.reviewerId]:[user.org_id,user.department_id,'manager',owner.id])).rows[0];
+      if(!reviewer||reviewer.role!=='manager'||reviewer.id===owner.id||reviewer.org_id!==user.org_id||reviewer.department_id!==user.department_id) deny(400,'INVALID_REVIEWER','Select a different authorized manager in this department');
+      if(input.krId){const kr=await loadKr(tx,input.krId);if(!visibleObjective(user,kr)||!visibleObjective(owner,kr))deny(400,'INVALID_KR','The linked key result must be visible to the task owner');}
+      const id=randomUUID();
+      const task=(await tx.query('INSERT INTO tasks(id,org_id,department_id,owner_id,reviewer_id,created_by,title,description,criteria,baseline_due_at,due_at,kr_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11) RETURNING *',[id,user.org_id,user.department_id,owner.id,reviewer.id,user.id,input.title,input.description,JSON.stringify(input.criteria),input.dueAt,input.krId||null])).rows[0];
+      await audit(tx,user,'task.created',id,{version:1},owner.id);return task;
+    });return reply.code(201).send(result);
+  });
+  app.post<{Params:{id:string}}>('/tasks/:id/submissions',async(req,reply)=>{
+    const user=actor(req),input=submissionInput.parse(req.body),id=identifier.parse(req.params.id);
+    const result=await db.transaction(async tx=>{
+      const task=await loadTask(tx,user,id,true);
+      if(task.owner_id!==user.id) deny(403,'FORBIDDEN','Only the task owner can submit evidence');
+      if(task.version!==input.expectedVersion) deny(409,'VERSION_CONFLICT','Task changed; reload before submitting');
+      const version=task.submission_version+1;
+      const submission=(await tx.query('INSERT INTO submissions(id,task_id,version,submitted_by,title,description,evidence_url) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[randomUUID(),id,version,user.id,input.title,input.description,input.evidenceUrl||null])).rows[0];
+      await tx.query('UPDATE tasks SET version=version+1,submission_version=$2,status=$3 WHERE id=$1',[id,version,'submitted']);
+      await audit(tx,user,'submission.created',id,{submissionVersion:version,previousReviewInvalidated:true},task.owner_id);return {submission,taskVersion:task.version+1};
+    });return reply.code(201).send(result);
+  });
+  app.post<{Params:{id:string}}>('/tasks/:id/reviews',async(req,reply)=>{
+    const user=actor(req),input=reviewInput.parse(req.body),id=identifier.parse(req.params.id);
+    if(user.role!=='manager') deny(403,'FORBIDDEN','A designated manager must review evidence');
+    const result=await db.transaction(async tx=>{
+      const task=await loadTask(tx,user,id,true);
+      if(task.owner_id===user.id) deny(403,'SELF_REVIEW_FORBIDDEN','Task owners cannot review their own work');
+      if(task.reviewer_id!==user.id) deny(403,'FORBIDDEN','Only the designated reviewer can confirm this task');
+      if(task.version!==input.expectedVersion||task.submission_version!==input.submissionVersion||task.status!=='submitted') deny(409,'VERSION_CONFLICT','Review must match the currently submitted version');
+      if(input.decision==='accept'&&(input.quality===undefined||input.verifiedCurrentSubmission!==true)) deny(400,'HUMAN_VERIFICATION_REQUIRED','A quality score and actual evidence verification are required');
+      const review=(await tx.query('INSERT INTO reviews(id,task_id,submission_version,reviewer_id,decision,quality,note) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[randomUUID(),id,input.submissionVersion,user.id,input.decision,input.decision==='accept'?input.quality:null,input.note])).rows[0];
+      await tx.query('UPDATE tasks SET version=version+1,status=$2 WHERE id=$1',[id,input.decision==='accept'?'accepted':'revision']);
+      await audit(tx,user,'review.'+input.decision,id,{submissionVersion:input.submissionVersion,quality:review.quality},task.owner_id);return {review,taskVersion:task.version+1};
+    });return reply.code(201).send(result);
+  });
+  app.get('/objectives',async req=>{
+    const user=actor(req),rows=(await db.query('SELECT * FROM objectives WHERE org_id=$1 ORDER BY id',[user.org_id])).rows;
+    return {items:rows.filter(o=>visibleObjective(user,o))};
+  });
+  app.get('/key-results',async req=>{
+    const user=actor(req),rows=(await db.query('SELECT k.*,o.org_id,o.department_id,o.owner_id,o.level FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE o.org_id=$1 ORDER BY k.id',[user.org_id])).rows;
+    return {items:rows.filter(o=>visibleObjective(user,o)).map(kr=>({...kr,progress:krProgress(kr)}))};
+  });
+  app.post<{Params:{id:string}}>('/key-results/:id/measurements',async(req,reply)=>{
+    const user=actor(req),input=measurementInput.parse(req.body),id=identifier.parse(req.params.id);
+    if(user.role!=='manager') deny(403,'FORBIDDEN','A manager must verify metric updates');
+    const result=await db.transaction(async tx=>{
+      const kr=await loadKr(tx,id,true);
+      if(!visibleObjective(user,kr)||kr.department_id!==user.department_id) deny(404,'NOT_FOUND','Key result not found');
+      if(kr.version!==input.expectedVersion) deny(409,'VERSION_CONFLICT','Key result changed; reload before recording');
+      await tx.query('INSERT INTO measurements(id,kr_id,actual,source,note,recorded_by) VALUES($1,$2,$3,$4,$5,$6)',[randomUUID(),id,input.actual,input.source,input.note,user.id]);
+      const updated=(await tx.query('UPDATE key_results SET actual=$2,version=version+1 WHERE id=$1 RETURNING *',[id,input.actual])).rows[0];
+      await audit(tx,user,'kr.measured',id,{actual:input.actual,source:input.source},kr.owner_id||user.id);return {...updated,progress:krProgress(updated)};
+    });return reply.code(201).send(result);
+  });
+  app.post<{Params:{id:string}}>('/tasks/:id/analyze',async req=>{await loadTask(db,actor(req),identifier.parse(req.params.id));return deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');});
+  app.get('/notifications/preview',async req=>{
+    const user=actor(req),[where,params]=scope(user),tasks=(await db.query(`SELECT id,title,status,owner_id,due_at FROM tasks WHERE ${where} AND status<>$3 ORDER BY due_at LIMIT 100`,[...params,'accepted'])).rows;
+    return {status:'draft',sent:false,recipient:user.id,items:tasks};
+  });
+  app.post('/notifications/send',async req=>{actor(req);return deny(501,'NOTIFICATIONS_NOT_CONFIGURED','Notification delivery is not integrated; no message was sent');});
+  app.get('/audit',async req=>{const [where,params]=scope(actor(req));return {items:(await db.query(`SELECT * FROM audit_events WHERE ${where} ORDER BY created_at DESC,id LIMIT 100`,[...params])).rows,limit:100};});
+  if(options.closeDatabase!==false) app.addHook('onClose',async()=>db.close());
+  return app;
+}

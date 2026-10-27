@@ -1,0 +1,9 @@
+node_modules/
+build/
+.env
+.env.*
+!.env.example
+.runtime/
+*.log
+.DS_Store
+coverage/
