@@ -75,7 +75,9 @@ export class DingTalkClient {
     const profile=await this.request('https://api.dingtalk.com/v1.0/contact/users/me',{headers:{'x-acs-dingtalk-access-token':token.accessToken}});
     if (typeof profile.unionId!=='string' || !profile.unionId) throw new DingTalkError('DINGTALK_INVALID_RESPONSE',502);
     const mapping=await this.enterprise('/topapi/user/getbyunionid',{unionid:profile.unionId});
-    if (mapping.result?.contact_type!==0 || typeof mapping.result?.userid!=='string') throw new DingTalkError('DINGTALK_MEMBERSHIP_REJECTED',403);
+    // Official schema uses Number, its example uses "0": https://open.dingtalk.com/document/orgapp/query-a-user-by-the-union-id.md
+    const contactType=mapping.result?.contact_type;
+    if ((contactType!==0 && contactType!=='0') || typeof mapping.result?.userid!=='string') throw new DingTalkError('DINGTALK_MEMBERSHIP_REJECTED',403);
     return this.member(mapping.result.userid,profile.unionId);
   }
   async listDepartmentUsers(deptId: string): Promise<DingTalkProfile[]> {
