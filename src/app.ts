@@ -7,6 +7,7 @@ import { visibleObjective, visibleTask, krProgress } from './domain.js';
 import { languageFrom, message, type Language } from './i18n.js';
 import { ApiError, deny } from './errors.js';
 import { registerIntegrationRoutes, type IntegrationOptions } from './integrations/routes.js';
+import { BOT_OAUTH_PREFIX, BOT_OAUTH_WELL_KNOWN } from './integrations/grok-bot-oauth.js';
 
 declare module 'fastify' { interface FastifyRequest { actor: User | null; language: Language; sessionToken: string | null; cookieAuthenticated: boolean } }
 const identifier = z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
@@ -46,6 +47,11 @@ export async function buildApp(options:AppOptions) {
   const devEnabled=options.allowDevLogin===true && environment!=='production';
   if(devEnabled && (options.devLoginSecret?.length || 0)<32) throw new Error('DEV_LOGIN_SECRET must contain at least 32 characters when development login is enabled');
   const app=Fastify({logger:false,bodyLimit:128*1024,trustProxy:false});
+  app.addContentTypeParser('application/x-www-form-urlencoded',{parseAs:'string'},(_req,body,done)=>{
+    const values=new URLSearchParams(String(body)),output:Record<string,string>={};
+    for(const[key,value]of values){if(Object.hasOwn(output,key)){const error=Object.assign(new Error('Duplicate form field'),{statusCode:400});done(error);return;}Object.defineProperty(output,key,{value,enumerable:true});}
+    done(null,output);
+  });
   app.decorateRequest('actor',null);
   app.decorateRequest('language','zh');
   app.decorateRequest('sessionToken',null);
@@ -53,13 +59,15 @@ export async function buildApp(options:AppOptions) {
   const integrations={...options.integrations,secureCookies:environment==='production'||options.integrations?.secureCookies===true};
   // This exact endpoint has its own worker-only bearer authentication, never a user session.
   const publicPaths=new Set(['/health','/capabilities','/auth/dev-login','/auth/dingtalk/start','/auth/dingtalk/callback','/integrations/grok-bot/mcp']);
+  for(const path of [...BOT_OAUTH_WELL_KNOWN,...['/register','/authorize','/token','/revoke','/consent.css'].map(path=>BOT_OAUTH_PREFIX+path)])publicPaths.add(path);
   app.addHook('onRequest',async(req,reply)=>{
     req.language=languageFrom(req.headers['accept-language']);
     reply.header('Content-Language',req.language).header('Cache-Control','no-store').header('X-Content-Type-Options','nosniff').header('Referrer-Policy','no-referrer');
-    if(publicPaths.has(req.url.split('?')[0])) return;
+    const requestPath=req.url.split('?')[0];
+    if(publicPaths.has(requestPath)||/^\/integrations\/grok-bot\/oauth\/requests\/[A-Za-z0-9_-]{43}$/.test(requestPath)) return;
     const cookieToken=readCookie(req.headers.cookie,sessionCookieName(integrations.secureCookies));
     const token=req.headers.authorization?(req.headers.authorization.startsWith('Bearer ')?req.headers.authorization.slice(7):undefined):cookieToken;
-    if(token&&integrations.bot&&sameSecret(token,integrations.bot.workerToken))deny(401,'UNAUTHENTICATED','Authentication is required');
+    if(token&&integrations.bot?.workerToken&&sameSecret(token,integrations.bot.workerToken))deny(401,'UNAUTHENTICATED','Authentication is required');
     req.sessionToken=token||null;req.cookieAuthenticated=!req.headers.authorization&&!!cookieToken;
     req.actor=await resolveSession(db,token?'Bearer '+token:undefined);
     if(!req.actor) deny(401,'UNAUTHENTICATED','Authentication is required');
@@ -83,7 +91,7 @@ export async function buildApp(options:AppOptions) {
     catch { return reply.code(503).send({status:'unavailable',service:'onelaser-workos-api'}); }
     return {status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false};
   });
-  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?integrations.bot:integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
+  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?(integrations.bot&&(!(integrations.botMcpAuthMode==='oauth')||!!(integrations.botOAuth?.publicUrl&&integrations.botOAuth.orgId&&integrations.botOAuth.redirectUris.length))):integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',botMcpAuthMode:integrations.botMcpAuthMode||'bearer',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
   const attempts=new Map<string,{count:number;until:number}>();
   app.post('/auth/dev-login',async(req,reply)=>{
     if(!devEnabled) deny(404,'DEV_LOGIN_DISABLED','Development login is disabled');

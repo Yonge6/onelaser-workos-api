@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { sameSecret } from '../auth.js';
 import { ApiError } from '../errors.js';
 import { AiIntegrationError } from './grok.js';
+import type { BotOAuthPrincipal } from './grok-bot-oauth.js';
 
 export const GROK_BOT_MCP_PATH = '/integrations/grok-bot/mcp';
 export const GROK_BOT_MCP_VERSIONS = ['2026-07-28', '2025-11-25', '2025-03-26'] as const;
@@ -17,8 +18,10 @@ type RpcReply = { code: (status: number) => RpcReply; type: (contentType: string
 export type GrokBotMcpOptions = {
   workerToken?: string;
   appPublicUrl?: string;
-  getReviewJob: (jobId: string) => Promise<unknown>;
-  submitReview: (jobId: string, leaseToken: string, result: unknown) => Promise<unknown>;
+  authMode?:'bearer'|'oauth';oauthConfigured?:boolean;oauthChallenge?:string;
+  resolveAccess?: (token:string)=>Promise<BotOAuthPrincipal|null>;
+  getReviewJob: (jobId: string,principal?:BotOAuthPrincipal) => Promise<unknown>;
+  submitReview: (jobId: string, leaseToken: string, result: unknown,principal?:BotOAuthPrincipal) => Promise<unknown>;
 };
 const object = (value: unknown): value is JsonObject => typeof value === 'object' && value !== null && !Array.isArray(value);
 const validId = (value: unknown): value is RpcId => typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value));
@@ -82,7 +85,8 @@ function accepts(value: string, mediaType: string) {
  * https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning
  * https://modelcontextprotocol.io/specification/2026-07-28/server/discover
  * https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
- * This private endpoint uses a preconfigured bearer secret, not MCP OAuth discovery.
+ * This private endpoint selects either preconfigured bearer compatibility or
+ * OAuth access tokens discovered through the separate authorization provider.
  * Job authorization, organization boundaries, lease expiry and result validation belong
  * to the supplied callbacks. No business session, cookie or clientInfo grants access.
  */
@@ -90,20 +94,27 @@ export async function registerGrokBotMcp(app: FastifyInstance, options: GrokBotM
   const allowedOrigin = options.appPublicUrl ? new URL(options.appPublicUrl).origin : undefined;
   let toolCalls = 0;
   let toolWindowEnds = 0;
+  const principals=new WeakMap<object,BotOAuthPrincipal>();
   const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
     reply.header('Cache-Control', 'no-store').header('X-Content-Type-Options', 'nosniff');
-    if (!options.workerToken) return reply.code(503).send({ error: { code: 'GROK_BOT_NOT_CONFIGURED', status: 503 } });
+    const oauth=options.authMode==='oauth';
+    if (oauth?!options.oauthConfigured:!options.workerToken) return reply.code(503).send({ error: { code: 'GROK_BOT_NOT_CONFIGURED', status: 503 } });
     const origin = request.headers.origin;
     if (origin !== undefined && (!allowedOrigin || origin !== allowedOrigin)) return reply.code(403).send({ error: { code: 'ORIGIN_FORBIDDEN', status: 403 } });
     const authorization = request.headers.authorization;
     const token = typeof authorization === 'string' && authorization.length <= 4096 ? /^Bearer ([^\s]+)$/i.exec(authorization)?.[1] : undefined;
-    if (!token || !sameSecret(token, options.workerToken)) return reply.code(401).header('WWW-Authenticate', 'Bearer').send({ error: { code: 'UNAUTHORIZED', status: 401 } });
+    if(oauth){
+      const principal=token?await options.resolveAccess?.(token):null;
+      if(!principal)return reply.code(401).header('WWW-Authenticate',options.oauthChallenge||'Bearer').send({error:{code:'UNAUTHORIZED',status:401}});
+      principals.set(request,principal);return;
+    }
+    if (!token || !sameSecret(token, options.workerToken!)) return reply.code(401).header('WWW-Authenticate', 'Bearer').send({ error: { code: 'UNAUTHORIZED', status: 401 } });
   };
   app.route({
     method: ['GET', 'DELETE'], url: GROK_BOT_MCP_PATH, onRequest: authenticate,
     handler: async (_request, reply) => reply.code(405).header('Allow', 'POST').send()
   });
-  const handleMessage = async (request: Pick<FastifyRequest, 'body' | 'headers'>, reply: RpcReply) => {
+  const handleMessage = async (request: Pick<FastifyRequest, 'body' | 'headers'>, reply: RpcReply,principal?:BotOAuthPrincipal) => {
     const body = request.body;
     if (!object(body) || body.jsonrpc !== '2.0' || typeof body.method !== 'string' || !body.method || 'result' in body || 'error' in body ||
       ('id' in body && !validId(body.id)) || ('params' in body && !object(body.params))) {
@@ -163,11 +174,11 @@ export async function registerGrokBotMcp(app: FastifyInstance, options: GrokBotM
       if (params.name === 'workos_get_review_job') {
         const parsed = jobArguments.safeParse(params.arguments);
         if (!parsed.success) return rpcResult(reply, id, safeToolError(new ApiError(400, 'VALIDATION_ERROR', 'Invalid arguments')), modern);
-        return rpcResult(reply, id, toolResult(await options.getReviewJob(parsed.data.jobId)), modern);
+        return rpcResult(reply, id, toolResult(await options.getReviewJob(parsed.data.jobId,principal)), modern);
       }
       const parsed = reviewArguments.safeParse(params.arguments);
       if (!parsed.success || !object(params.arguments) || !Object.hasOwn(params.arguments, 'result')) return rpcResult(reply, id, safeToolError(new ApiError(400, 'VALIDATION_ERROR', 'Invalid arguments')), modern);
-      return rpcResult(reply, id, toolResult(await options.submitReview(parsed.data.jobId, parsed.data.leaseToken, parsed.data.result)), modern);
+      return rpcResult(reply, id, toolResult(await options.submitReview(parsed.data.jobId, parsed.data.leaseToken, parsed.data.result,principal)), modern);
     } catch (error) {
       return rpcResult(reply, id, safeToolError(error), modern);
     }
@@ -181,7 +192,7 @@ export async function registerGrokBotMcp(app: FastifyInstance, options: GrokBotM
       return rpcError(reply, 500, -32603, 'Internal error');
     }
   }, async (request, reply) => {
-    if (!Array.isArray(request.body)) return handleMessage(request, reply);
+    if (!Array.isArray(request.body)) return handleMessage(request, reply,principals.get(request));
     if (!accepts(request.headers.accept || '', 'application/json') || !accepts(request.headers.accept || '', 'text/event-stream')) return rpcError(reply, 406, -32600, 'Accept must include application/json and text/event-stream');
     const header = request.headers['mcp-protocol-version'];
     if ((header !== undefined && header !== '2025-03-26') || !request.body.length || request.body.some(item =>
@@ -192,7 +203,7 @@ export async function registerGrokBotMcp(app: FastifyInstance, options: GrokBotM
     for (const body of request.body) {
       let response: unknown;
       const capture: RpcReply = { code: () => capture, type: () => capture, send: value => { response = value; return value; } };
-      await handleMessage({ headers: request.headers, body }, capture);
+      await handleMessage({ headers: request.headers, body }, capture,principals.get(request));
       if (response !== undefined) responses.push(response);
     }
     return responses.length ? reply.type('application/json').send(responses) : reply.code(202).send();

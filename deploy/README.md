@@ -27,16 +27,19 @@
 | `DINGTALK_ALLOWED_DEPARTMENT_IDS` | 明确批准的真实部门 ID，逗号分隔；公司模式仍须指定 |
 | `DINGTALK_MANAGER_USER_IDS` | 明确批准的主管 userId，逗号分隔 |
 | `AI_REVIEW_MODE` | 模板选择 `bot`；代码默认 `api`。配置缺失时评审保持关闭 |
+| `GROK_BOT_MCP_AUTH_MODE` | Render 选择 `oauth`；代码默认 `bearer` 兼容模式 |
+| `GROK_BOT_OAUTH_REDIRECT_URIS` | OAuth 精确回调白名单，默认空；只能由管理员核对真实客户端后显式配置 |
+| `GROK_BOT_OAUTH_PRE_REGISTERED_CLIENT_ID` | 可选固定 HTTPS client ID 的本地映射；不抓取 client metadata |
 | `GROK_BOT_WEBHOOK_URL` / `GROK_BOT_WEBHOOK_SECRET` | 独立 Bot routine 的正式 HTTPS 触发地址与密钥 |
 | `GROK_BOT_WEBHOOK_ALLOWED_HOST` | 逐字核对 routine 显示的实际域名；不接受通配符或本机/私网地址 |
-| `GROK_BOT_WORKER_TOKEN` | 至少 32 个随机字符的专用 MCP 凭据，与 webhook 密钥不同 |
+| `GROK_BOT_WORKER_TOKEN` | 仅 `bearer` 兼容模式需要；OAuth 使用主管批准与 PKCE，不把静态密钥传给 Bot 聊天 |
 | `GROK_BOT_ORG_ID` | 允许读取评审作业的企业，默认可读取显式配置的 `DINGTALK_CORP_ID` |
 | `AI_PROVIDER_API_KEY` / `AI_MODEL_ID` | 仅 `api` 模式需要：模型密钥及账号实际支持结构化输出的模型 ID |
 | `DINGTALK_AGENT_ID` | 应用 AgentId，启用工作通知时需要 |
 
 钉钉企业管理员需要为独立应用批准登录身份、企业成员映射、指定部门与成员读取权限；工作通知仍需应用 AgentId 和明确启用。权限名称以企业应用后台当时界面和官方文档为准。应用可见范围限指定成员。模型仅接收本次授权任务的标准与成果文本；不自动读取链接、不发送薪资或全员档案。首次真实验证应使用虚构任务。
 
-Bot 触发和回写的具体步骤见 [Bot 接入说明](../docs/integrations/GROK_BOT_SETUP.md)。先部署基础服务，取得独立 Routine 的实际 webhook 地址与密钥但暂不触发；在托管平台补齐 Bot 环境变量并重部署后，再连接 MCP 客户端。仅设置 worker token 不会开放 MCP，Bot 配置不完整时该端点返回 503。模板不要求购买模型 API 额度。评审是异步作业，Webhook 接受请求只代表开始执行，结果通过受控 MCP 工具另行写回。Bot 套餐本身仍有用量限制，不能称为免费或无限量。同账号 Bots 共享云端电脑和登录，独立工作流不能代替服务端权限控制。
+Bot 触发和回写的具体步骤见 [Bot 接入说明](../docs/integrations/GROK_BOT_SETUP.md)。先部署基础服务与钉钉登录，配置管理员核对的精确回调/可选 client ID，再连接 OAuth MCP，由主管明确批准并点击“返回 Bot”。OAuth 连接可先于 webhook 配置完成；实际评审仍须独立 Routine 的 webhook 地址、密钥及主机名。回调白名单为空时 OAuth 关闭，不能用静态 worker secret 替代或降级匿名。模板不要求购买模型 API 额度。Webhook 接受请求只表示开始执行，结果另行回传。Bot 套餐仍有用量限制。同账号 Bots 共享云端电脑和登录，独立工作流不能代替服务端权限控制。
 
 ## 自有服务器备选
 
@@ -52,6 +55,7 @@ Bot 触发和回写的具体步骤见 [Bot 接入说明](../docs/integrations/GR
 - CI 必须通过：TypeScript、PGlite、真实 PostgreSQL、Docker 构建、同源 `/api`、安全头、默认关闭身份入口和未配置的 Bot 集成。
 - `/healthz` 检查数据库连通性；`/api/capabilities` 显示配置状态。`configured` 仅表示配置完整。当前版本的 `productionReady:false` 是固定标识，不随配置或真实租户验收自动改变；它不是部署失败信号，也不能替代实际验收记录。
 - 真实钉钉主管和员工登录；未批准企业/部门拒绝，普通员工不能读取他人任务或自行提权；同步停用成员后已有会话失效。
+- OAuth 模式核验根路径及带 MCP 路径的 well-known metadata、外部 `/api` 端点、真实客户端注册/精确回调、主管明确批准、PKCE、state/iss、刷新轮换与撤销。完成页不自动跳转；批准后两分钟内点击“返回 Bot”。静态 worker token、业务 Cookie 与 OAuth token 不可代用。配置摘要不匹配会拒绝旧 grant；永久停用须显式撤销。
 - 创建 OKR/KR、分配任务、员工提交成果、Grok 返回可核对引用、负责人验收、刷新后仍保留；冲突返回 409，不自动覆盖。Bot 模式另外验证排队、处理、完成、超时/不确定状态、手动重试、租约失效与旧版本拒绝，不以“已触发”冒充分析完成。
 - 中文/English、日夜模式、退出与重新登录检查。主题和语言可存本地；任务与会话不能存 localStorage。
 - 如需通知，先明确批准测试收件人，再设置 `DINGTALK_NOTIFICATIONS_ENABLED=true`。`queued` 表示平台接受请求，不能作为送达凭证。

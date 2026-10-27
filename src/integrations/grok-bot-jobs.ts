@@ -8,6 +8,7 @@ import { deny } from '../errors.js';
 import { reviewInputHash, reviewSources, validateEvaluation, type ReviewInput } from './grok.js';
 import type { GrokBotAdapter } from './grok-bot.js';
 import { registerGrokBotMcp } from './grok-bot-mcp.js';
+import type { BotOAuthService, BotOAuthPrincipal } from './grok-bot-oauth.js';
 
 const JOB_TTL=30*60*1000,LEASE_TTL=5*60*1000,MODEL='grok-bot';
 const identifier=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
@@ -34,7 +35,7 @@ async function audit(tx:Queryable,user:User,action:string,task:any,details:unkno
   await tx.query('INSERT INTO audit_events(id,org_id,department_id,owner_id,actor_id,action,object_id,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[randomUUID(),task.org_id,task.department_id,task.owner_id,user.id,action,task.id,JSON.stringify(details)]);
 }
 export class BotReviewJobs {
-  constructor(private db:Database,private adapter:GrokBotAdapter,private beforeCreate:(user:User)=>void=()=>{}){}
+  constructor(private db:Database,private adapter:GrokBotAdapter,private beforeCreate:(user:User)=>void=()=>{},private oauth?:BotOAuthService){}
   private assertTenant(user:User){if(user.org_id!==this.adapter.orgId)deny(404,'NOT_FOUND','Task not found');}
   private async insert(tx:Queryable,user:User,task:any,input:ReviewInput,retryOf?:string){
     this.beforeCreate(user);
@@ -93,10 +94,12 @@ export class BotReviewJobs {
     return {job:safeBotJob(job),mode:'bot' as const};
   }
   /** Lock task before job in every transaction, matching browser writes and enqueue/retry. */
-  private async workerContext(tx:Queryable,jobId:string){
+  private async workerContext(tx:Queryable,jobId:string,principal?:BotOAuthPrincipal){
+    if(this.oauth){if(!principal)deny(401,'BOT_OAUTH_INVALID_TOKEN','Authentication is required');await this.oauth.validatePrincipal(tx,principal);}
     const found=(await tx.query<Job>('SELECT * FROM ai_review_jobs WHERE id=$1 AND org_id=$2',[jobId,this.adapter.orgId])).rows[0];
     if(!found)deny(404,'NOT_FOUND','Task not found');
     const task=(await tx.query('SELECT * FROM tasks WHERE id=$1 FOR UPDATE',[found.task_id])).rows[0];
+    if(principal&&(task?.org_id!==principal.orgId||task?.department_id!==principal.departmentId))deny(404,'NOT_FOUND','Task not found');
     const job=(await tx.query<Job>('SELECT * FROM ai_review_jobs WHERE id=$1 AND org_id=$2 FOR UPDATE',[jobId,this.adapter.orgId])).rows[0];
     const requester=(await tx.query<User>('SELECT * FROM users WHERE id=$1 AND active=true FOR SHARE',[job.requested_by])).rows[0];
     if(!requester||requester.org_id!==this.adapter.orgId||!visibleTask(requester,task))deny(409,'BOT_REQUESTER_UNAVAILABLE','The request could not be completed');
@@ -109,9 +112,9 @@ export class BotReviewJobs {
     if(task.version!==job.task_version||task.submission_version!==job.submission_version||reviewInputHash(input)!==job.input_hash)deny(409,'BOT_JOB_STALE','Review must match the currently submitted version');
     return {job,task,requester,input};
   }
-  async getReviewJob(jobId:string){
+  async getReviewJob(jobId:string,principal?:BotOAuthPrincipal){
     return this.db.transaction(async tx=>{
-      const {job,input}=await this.workerContext(tx,jobId);
+      const {job,input}=await this.workerContext(tx,jobId,principal);
       if(job.status==='completed')return {job:safeBotJob(job),completed:true};
       const safe=safeBotJob(job);
       if(safe.status==='expired')deny(410,safe.errorCode||'BOT_JOB_EXPIRED','The request could not be completed');
@@ -124,9 +127,9 @@ export class BotReviewJobs {
         resultSchema:{summary:'string',criteria:[{criterionId:'C1',finding:'supported | partially_supported | contradicted | insufficient_evidence',reason:'string',evidenceRefs:['authorized source ID'],quotes:['matching verbatim quote']}],missingEvidence:['string'],uncertainties:['string'],humanReviewRequired:true}};
     });
   }
-  async submitReview(jobId:string,leaseToken:string,result:unknown){
+  async submitReview(jobId:string,leaseToken:string,result:unknown,principal?:BotOAuthPrincipal){
     return this.db.transaction(async tx=>{
-      const {job,task,requester,input}=await this.workerContext(tx,jobId);
+      const {job,task,requester,input}=await this.workerContext(tx,jobId,principal);
       if(!job.lease_hash||!sameSecret(job.lease_hash,hash(leaseToken)))deny(409,'BOT_LEASE_INVALID','The request could not be completed');
       const validated=validateEvaluation(input,result),resultHash=hash(JSON.stringify(validated));
       if(job.status==='completed'){
@@ -145,13 +148,13 @@ export class BotReviewJobs {
     });
   }
 }
-export async function registerBotReviewRoutes(app:FastifyInstance,db:Database,adapter:GrokBotAdapter|undefined,appPublicUrl:string|undefined,beforeCreate:(user:User)=>void){
-  const service=adapter?new BotReviewJobs(db,adapter,beforeCreate):undefined;
-  const ready=()=>service||deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');
+export async function registerBotReviewRoutes(app:FastifyInstance,db:Database,adapter:GrokBotAdapter|undefined,appPublicUrl:string|undefined,beforeCreate:(user:User)=>void,auth:{mode?:'bearer'|'oauth';oauth?:BotOAuthService}={}){
+  const service=adapter?new BotReviewJobs(db,adapter,beforeCreate,auth.oauth):undefined;
+  const ready=()=>{if(!service||(auth.mode==='oauth'&&!auth.oauth?.configured))deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');return service;};
   const actor=(req:FastifyRequest)=>req.actor||deny(401,'UNAUTHENTICATED','Authentication is required');
   app.get<{Params:{id:string}}>('/tasks/:id/analysis-jobs',async req=>ready().list(actor(req),identifier.parse(req.params.id)));
   app.get<{Params:{id:string;jobId:string}}>('/tasks/:id/analysis-jobs/:jobId',async req=>ready().get(actor(req),identifier.parse(req.params.id),identifier.parse(req.params.jobId)));
   app.post<{Params:{id:string;jobId:string}}>('/tasks/:id/analysis-jobs/:jobId/retry',async(req,reply)=>{z.object({}).strict().parse(req.body??{});return reply.code(202).send(await ready().retry(actor(req),identifier.parse(req.params.id),identifier.parse(req.params.jobId)));});
-  await registerGrokBotMcp(app,{workerToken:adapter?.workerToken,appPublicUrl,getReviewJob:jobId=>ready().getReviewJob(jobId),submitReview:(jobId,leaseToken,result)=>ready().submitReview(jobId,leaseToken,result)});
+  await registerGrokBotMcp(app,{workerToken:adapter?.workerToken,appPublicUrl,authMode:auth.mode,oauthConfigured:auth.oauth?.configured,oauthChallenge:auth.oauth?.challenge(),resolveAccess:token=>auth.oauth?.resolveAccess(token)||Promise.resolve(null),getReviewJob:(jobId,principal)=>ready().getReviewJob(jobId,principal),submitReview:(jobId,leaseToken,result,principal)=>ready().submitReview(jobId,leaseToken,result,principal)});
   return service;
 }

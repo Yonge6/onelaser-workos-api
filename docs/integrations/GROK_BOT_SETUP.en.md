@@ -2,7 +2,7 @@
 
 [中文](GROK_BOT_SETUP.md)
 
-This optional adapter uses a dedicated Routine and remote HTTPS MCP connection against the Grok Bot account's allowance. The separate model API remains the code default (`AI_REVIEW_MODE=api`). Mock tests verify the local contract; they do not verify a live Routine, account allowance, remote client compatibility, or real callbacks.
+This adapter uses a dedicated Routine and remote HTTPS MCP connection against the Grok Bot account's allowance. Code defaults remain `AI_REVIEW_MODE=api` and MCP `bearer` compatibility; Render explicitly selects `bot` and `oauth`. Native Bot OAuth requires no static worker secret in chat. Synthetic tests do not verify a live Routine, allowance, client protocol, or actual callbacks.
 
 ## Server configuration
 
@@ -10,13 +10,16 @@ Set `AI_REVIEW_MODE=bot` and configure these values in the deployment secret man
 
 | Variable | Purpose |
 | --- | --- |
+| `GROK_BOT_MCP_AUTH_MODE` | `oauth` for the native Bot; `bearer` only for clients with a secure custom-header configuration |
+| `GROK_BOT_OAUTH_REDIRECT_URIS` | Required for OAuth: exact administrator-verified callback URIs, comma separated; empty by default |
+| `GROK_BOT_OAUTH_PRE_REGISTERED_CLIENT_ID` | Optional exact observed HTTPS client ID mapped locally; the URL is never fetched |
 | `GROK_BOT_WEBHOOK_URL` | Actual HTTPS webhook URL for the dedicated Routine |
 | `GROK_BOT_WEBHOOK_SECRET` | Bearer secret verified by the Routine |
 | `GROK_BOT_WEBHOOK_ALLOWED_HOST` | Explicit exact hostname from that URL; no vendor hostname is assumed |
-| `GROK_BOT_WORKER_TOKEN` | Independent random remote-MCP secret, at least 32 characters, different from the webhook secret |
+| `GROK_BOT_WORKER_TOKEN` | Required only for `bearer` compatibility: independent random secret, at least 32 characters, different from the webhook secret; unnecessary in OAuth mode |
 | `GROK_BOT_ORG_ID` | Single allowed tenant; defaults to an explicitly configured `DINGTALK_CORP_ID` |
 
-Bot mode does not require `AI_PROVIDER_API_KEY` or `AI_MODEL_ID`. Missing configuration produces `aiReviewMode: "bot"`, `aiReview: "not_integrated"` and variable names in `setup.aiMissing`. Secret values never appear in capabilities, browser configuration, notification payloads, URLs or business sessions.
+Bot mode needs no `AI_PROVIDER_API_KEY` or `AI_MODEL_ID`. Capabilities expose `aiReviewMode`, `botMcpAuthMode` and missing setting names. OAuth without an explicit callback allowlist, organization or HTTPS origin stays disabled with 503, never anonymous fallback. Configured OAuth connectivity can be set up before webhook dispatch settings; actual assessment remains disabled until those are complete. Secrets do not appear in browser configuration, notifications or business sessions.
 
 Webhook URLs cannot contain credentials, query strings, fragments, custom ports or IP literals. The default HTTPS transport rejects non-public DNS answers, pins the resolved TLS address, and does not follow redirects. An allowlisted hostname still requires a human to verify it against the account-generated URL.
 
@@ -24,15 +27,25 @@ Webhook URLs cannot contain credentials, query strings, fragments, custom ports 
 
 Create an independent Routine while preserving existing support, DingTalk and Zoho workflows. Limit this Routine to the two tools on this connection; do not forward evidence through other connectors.
 
-Activate in this order so the MCP endpoint is available before the client connects:
+Activate in this order:
 
-1. Deploy the base service and obtain its production HTTPS URL.
-2. Create the dedicated Work OS Routine and obtain its actual webhook URL and authentication secret without sending a trigger request.
-3. Complete all required Bot settings in the hosting environment and redeploy. `GROK_BOT_ORG_ID` may use the explicitly configured `DINGTALK_CORP_ID`; setting only the worker token does not enable MCP.
-4. Connect remote MCP using the URL and independent Bearer below, and confirm that it lists only the two Work OS tools.
-5. Give the Routine these tools and the instructions below, then test dispatch, completion and human acceptance with one fictional task.
+1. Deploy the base service, obtain its HTTPS URL, and configure the independent DingTalk app and designated manager login.
+2. Verify the client ID and callbacks against the client request or official client metadata. Set `GROK_BOT_MCP_AUTH_MODE=oauth`, the exact callback allowlist and organization, then redeploy. Set the optional local pre-registration ID only if the client uses that fixed URL identifier, and check the actual request when connecting.
+3. Connect the native Bot to the MCP URL below. A manager explicitly approves in Work OS and clicks Return to Bot. The code expires two minutes after approval; expired flows require a new request. Login itself never approves access.
+4. Create the dedicated Work OS Routine, obtain its actual webhook URL and secret, configure the three webhook settings and redeploy before requesting assessments.
+5. Confirm exactly two Work OS tools, add the instructions below, and test dispatch, completion and human acceptance with one fictional task.
 
-Remote MCP URL: `https://your-app.example/api/integrations/grok-bot/mcp`. Configure `Authorization: Bearer <GROK_BOT_WORKER_TOKEN>` using a remote connection that supports a custom Bearer header. Do not place it in the URL. The server exposes only known-job pickup and completion; it has no employee directory, task listing, salary or employment decision tool.
+Remote MCP URL: `https://your-app.example/api/integrations/grok-bot/mcp`. OAuth grants only `workos.review`, bound to the complete MCP resource, organization and manager workspace. Existing `bearer` mode remains available for clients with safe header configuration; never put the worker secret into Bot chat or URLs.
+
+Callbacks support HTTPS. Administrator-pinned exceptions are restricted to the exact `cursor://anysphere.cursor-mcp/oauth/callback` base and literal `localhost`, `127.0.0.1` or `[::1]` HTTP callbacks with explicit fixed ports and paths. Wildcards, arbitrary schemes, hostname aliases, credentials and fragments are rejected. Authorization and token exchange still require the exact registered callback and PKCE S256.
+
+Use the [official client metadata](https://cursor.com/oauth/mcp-client.json) as a verification source. Read-only verification on 2026-10-28 confirmed HTTPS and loopback callbacks; the [October official support updates](https://forum.cursor.com/t/grok-bot-custom-mcp-oauth-fails-before-sign-in-redirect-uri-not-allowed/171877) also describe legacy DCR with the native scheme. These are evidence sources, not default enabled callback settings. Unknown URL client IDs cause no network fetch; they must be explicitly pre-registered locally or use an issued DCR ID.
+
+DCR grants no access. It permits ten registrations per organization/UTC hour and fifty retained dynamic clients. Dynamic clients older than one hour are reclaimed only if they have no grant history or valid pending request; pinned clients, grant history and active requests are preserved. Each client has at most thirty pending authorizations. Client names are unverified text; inspect the callback rather than trusting a name.
+
+Codes are one-use, access tokens last at most fifteen minutes, and grants/refresh tokens at most thirty days. Only token digests are stored. Refresh rotates atomically; replay persistently revokes the whole family. Manager deactivation, demotion or workspace changes immediately fail current checks. Changing callbacks or the pinned ID makes the original policy invalid; restoring the identical policy can restore an unexpired, unrevoked original grant if its manager is still eligible. This is not fresh consent. Explicitly revoke grants for permanent removal.
+
+Managers list their own grants with `GET /api/integrations/grok-bot/oauth/grants` and permanently revoke with `POST /api/integrations/grok-bot/oauth/grants/:id/revoke`. Cookie writes require CSRF and the same-origin Origin. Business logout does not revoke a Bot grant. OAuth tokens, business sessions and compatibility worker secrets cannot substitute for one another.
 
 Routine instruction template:
 
@@ -52,7 +65,7 @@ If already completed, stop. On expiry, conflict or failure, stop;
 never automatically retry or start another run.
 ```
 
-The server implements MCP `2026-07-28` per-request negotiation and the `2025-11-25` initialize lifecycle, plus `2025-03-26` compatibility for legacy requests without a protocol header. It uses JSON responses without sessions or an SSE listener. Incomplete Bot configuration returns 503; once configured, missing or invalid Bearer credentials return 401 and a forbidden Origin returns 403. Authenticated GET and DELETE requests return 405. Protocol tests do not establish compatibility with a real Grok Bot client.
+The server implements MCP `2026-07-28` per-request negotiation and the `2025-11-25` initialize lifecycle, plus `2025-03-26` compatibility for headerless legacy requests. Responses use JSON without sessions or an SSE listener. Unconfigured selected authentication returns 503, invalid credentials return 401 (OAuth includes a resource-metadata challenge), and forbidden Origin returns 403. Authenticated GET/DELETE return 405. Caddy forwards root and path-specific well-known discovery to the API; advertised endpoints include the external `/api` path. Actual Bot registration, authorization, refresh and completion still need live verification.
 
 ## State and human control
 

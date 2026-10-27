@@ -12,6 +12,8 @@ Production packaging: [deployment guide](deploy/README.en.md) · [中文部署�
 
 The separate model API remains the default (`AI_REVIEW_MODE=api`). Optional [Grok Bot asynchronous assessment](docs/integrations/GROK_BOT_SETUP.en.md) (`AI_REVIEW_MODE=bot`) uses a dedicated Routine and protected remote MCP pickup/completion tools. Bot mode needs no model API credit; actual account allowance and the live connection still require verification. New dispatches are limited to ten per organization per UTC clock hour, without automatic retries.
 
+Render selects MCP OAuth. After an administrator configures exact callbacks, a DingTalk manager explicitly approves `workos.review` and clicks Return to Bot. Only token digests are stored, with server-side refresh rotation, replay protection and grant revocation. Explicit `bearer` compatibility remains available; the native Bot needs no worker secret in chat. Actual client connectivity still requires deployment verification.
+
 ## Run locally
 
 Use Node.js 22 or newer; Node.js 24 is recommended. The following commands work in macOS, Linux, or a compatible shell:

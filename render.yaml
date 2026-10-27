@@ -25,6 +25,8 @@ services:
         value: OneLaser
       - key: AI_REVIEW_MODE
         value: bot
+      - key: GROK_BOT_MCP_AUTH_MODE
+        value: oauth
       - key: DATABASE_URL
         fromDatabase:
           name: onelaser-workos-db
@@ -41,9 +43,11 @@ services:
         sync: false
       - key: DINGTALK_NOTIFICATIONS_ENABLED
         value: 'false'
-      # Deploy the base service, then obtain the independent routine's webhook
-      # URL/secret without triggering it. Add all GROK_BOT_* settings and redeploy
-      # before connecting the scoped MCP client; incomplete Bot settings return 503.
+      # Configure GROK_BOT_OAUTH_REDIRECT_URIS only after verifying the client
+      # request or official client metadata; no allowlist is enabled by default.
+      # Optional exact local client-ID pin: GROK_BOT_OAUTH_PRE_REGISTERED_CLIENT_ID.
+      # OAuth discovery/consent can be enabled before the Routine webhook settings.
+      # Add webhook URL/secret/allowed host before requesting actual assessments.
       # Missing settings disable assessment; they never enable developer authentication.
       # Optional API fallback: AI_REVIEW_MODE=api, AI_PROVIDER_API_KEY, AI_MODEL_ID.
       # Optional notifications: DINGTALK_AGENT_ID and the explicit enable switch.

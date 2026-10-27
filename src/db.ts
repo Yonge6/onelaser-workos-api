@@ -124,6 +124,39 @@ CREATE TABLE IF NOT EXISTS bot_dispatch_budgets (
  org_id text NOT NULL, hour_start timestamptz NOT NULL, attempts integer NOT NULL CHECK(attempts BETWEEN 1 AND 10),
  PRIMARY KEY(org_id,hour_start)
 );
+CREATE TABLE IF NOT EXISTS bot_oauth_clients (
+ id text PRIMARY KEY, org_id text NOT NULL, name text NOT NULL, redirect_uris jsonb NOT NULL, grant_types jsonb NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS bot_oauth_client_capacity (
+ org_id text PRIMARY KEY, clients integer NOT NULL CHECK(clients BETWEEN 0 AND 50)
+);
+CREATE TABLE IF NOT EXISTS bot_oauth_registration_budgets (
+ org_id text NOT NULL, hour_start timestamptz NOT NULL, attempts integer NOT NULL CHECK(attempts BETWEEN 1 AND 10),
+ PRIMARY KEY(org_id,hour_start)
+);
+CREATE TABLE IF NOT EXISTS bot_oauth_requests (
+ id text PRIMARY KEY, org_id text NOT NULL, client_id text NOT NULL REFERENCES bot_oauth_clients(id),
+ redirect_uri text NOT NULL, resource text NOT NULL, scope text NOT NULL, state text NOT NULL,
+ code_challenge text NOT NULL, nonce_hash text NOT NULL, policy_hash text NOT NULL, expires_at timestamptz NOT NULL, consumed_at timestamptz
+);
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_request_id text;
+CREATE TABLE IF NOT EXISTS bot_oauth_grants (
+ id text PRIMARY KEY, org_id text NOT NULL, department_id text NOT NULL, manager_id text NOT NULL REFERENCES users(id),
+ client_id text NOT NULL REFERENCES bot_oauth_clients(id), redirect_uri text NOT NULL, resource text NOT NULL, scope text NOT NULL, policy_hash text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL, revoked_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS bot_oauth_codes (
+ code_hash text PRIMARY KEY, request_id text NOT NULL UNIQUE REFERENCES bot_oauth_requests(id),
+ grant_id text NOT NULL REFERENCES bot_oauth_grants(id), expires_at timestamptz NOT NULL, consumed_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS bot_oauth_tokens (
+ token_hash text PRIMARY KEY, kind text NOT NULL CHECK(kind IN ('access','refresh')),
+ grant_id text NOT NULL REFERENCES bot_oauth_grants(id), expires_at timestamptz NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), used_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS bot_oauth_grant_scope_idx ON bot_oauth_grants(org_id,manager_id);
+CREATE INDEX IF NOT EXISTS bot_oauth_token_grant_idx ON bot_oauth_tokens(grant_id);
 CREATE TABLE IF NOT EXISTS notification_requests (
  org_id text NOT NULL, requested_by text NOT NULL REFERENCES users(id), request_key text NOT NULL,
  payload_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(org_id,requested_by,request_key)

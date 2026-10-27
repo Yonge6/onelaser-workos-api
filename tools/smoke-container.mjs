@@ -37,7 +37,13 @@ assert.equal(capabilities.teamMode, 'company');
 assert.equal(capabilities.auth.loginEnabled, false);
 assert.equal(capabilities.aiReview, 'not_integrated');
 assert.equal(capabilities.aiReviewMode, 'bot');
+assert.equal(capabilities.botMcpAuthMode, 'oauth');
 assert.ok(capabilities.setup.aiMissing.includes('GROK_BOT_WEBHOOK_URL'));
+assert.ok(capabilities.setup.aiMissing.includes('GROK_BOT_OAUTH_REDIRECT_URIS'));
+for(const path of ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/integrations/grok-bot/mcp','/.well-known/oauth-authorization-server','/.well-known/oauth-authorization-server/api/integrations/grok-bot/oauth','/api/.well-known/oauth-protected-resource']){
+  const response=await fetch(origin+path);assert.equal(response.status,503,path+' must reach disabled OAuth rather than static HTML');assert.equal((await response.json()).error,'temporarily_unavailable');
+}
+assert.match((await fetch(origin+'/api/integrations/grok-bot/oauth/consent.css')).headers.get('content-type'),/text\/css/);
 assert.equal(capabilities.employeeDecisions, 'not_supported');
 assert.ok(capabilities.setup.dingtalkMissing.includes('DINGTALK_CLIENT_SECRET'));
 for (const path of ['/api/tasks', '/api/directory', '/api/objectives', '/api/auth/csrf']) {

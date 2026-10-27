@@ -27,16 +27,19 @@ The production host supplies an HTTPS subdomain. GitHub Pages remains a public d
 | `DINGTALK_ALLOWED_DEPARTMENT_IDS` | Approved real department IDs, comma separated; required in company mode |
 | `DINGTALK_MANAGER_USER_IDS` | Explicit manager user IDs, comma separated |
 | `AI_REVIEW_MODE` | Template selects `bot`; code defaults to `api`. Incomplete integration settings disable assessment |
+| `GROK_BOT_MCP_AUTH_MODE` | Render selects `oauth`; code defaults to `bearer` compatibility |
+| `GROK_BOT_OAUTH_REDIRECT_URIS` | Exact OAuth callback allowlist, empty by default; an administrator must verify the actual client before setting it |
+| `GROK_BOT_OAUTH_PRE_REGISTERED_CLIENT_ID` | Optional exact HTTPS client ID mapped locally; no metadata URL fetching |
 | `GROK_BOT_WEBHOOK_URL`, `GROK_BOT_WEBHOOK_SECRET` | Dedicated routine's actual HTTPS trigger URL and secret |
 | `GROK_BOT_WEBHOOK_ALLOWED_HOST` | Exact verified routine hostname, without wildcards or local/private destinations |
-| `GROK_BOT_WORKER_TOKEN` | Separate random MCP credential, at least 32 characters, different from the webhook secret |
+| `GROK_BOT_WORKER_TOKEN` | `bearer` compatibility only; OAuth uses manager consent and PKCE, without a static worker secret in Bot chat |
 | `GROK_BOT_ORG_ID` | Approved worker organization; may fall back to the explicitly configured DingTalk corporation |
 | `AI_PROVIDER_API_KEY`, `AI_MODEL_ID` | Required only in `api` mode: separate API key and an account-accessible model supporting structured output |
 | `DINGTALK_AGENT_ID` | App AgentId, required for work notifications |
 
 An enterprise administrator must grant the independent app its login identity, enterprise membership mapping and approved department/member read permissions. Work notifications still require the app AgentId and explicit activation. Use the current developer console and official documentation for exact scope names. Limit app visibility to approved employees. The model receives only the authorized task criteria and submitted text; it does not fetch links or receive compensation or the employee directory. Use fictional material for the first real call.
 
-See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Deploy the base service, obtain the dedicated Routine's actual webhook URL and secret without triggering it, then complete the Bot environment settings and redeploy before connecting the MCP client. Setting only the worker token does not enable MCP; incomplete Bot settings produce 503 on that endpoint. The template does not require buying model API credits. Bot review is asynchronous: webhook acceptance means execution started; results return separately through restricted MCP tools. Bot usage still has plan limits. Bots on one account share a cloud computer and logins, so workflow separation does not replace server authorization.
+See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Deploy the base service and DingTalk login, configure administrator-verified callbacks and any required pinned client ID, then connect OAuth MCP. A manager explicitly approves and clicks Return to Bot. OAuth can connect before webhook settings are complete; actual assessments still require the dedicated Routine URL, secret and hostname. An empty callback allowlist disables OAuth, without static-secret or anonymous fallback. The template requires no model API credits. Webhook acceptance only starts execution; completion returns separately. Bot usage has plan limits, and account-wide shared computer/logins mean a separate workflow does not replace server authorization.
 
 ## Existing server alternative
 
@@ -52,6 +55,7 @@ See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Depl
 - Require CI: TypeScript, PGlite, real PostgreSQL, Docker build, same-origin API, security headers, fail-closed login and an unconfigured Bot adapter.
 - `/healthz` checks database connectivity. `/api/capabilities` reports configuration only; `configured` is not verified acceptance. In this version, `productionReady:false` is a constant marker that does not change with configuration or real tenant acceptance. It is not a deployment-failure signal or a substitute for acceptance records.
 - Verify actual manager and employee login, rejection of unapproved enterprise/departments, employee scope, no privilege escalation, and immediate loss of sessions after member deactivation through sync.
+- In OAuth mode verify root/path-specific well-known metadata, external `/api` endpoints, actual client registration and exact redirects, explicit manager consent, PKCE, state/iss, refresh rotation and revoke. Click Return to Bot within two minutes of approval; the completion page does not auto-navigate. Worker secrets, business cookies and OAuth tokens cannot substitute for one another. A changed policy rejects old grants; permanent removal requires explicit revoke.
 - Create OKRs/KRs and a task; submit evidence; verify Grok citations; inspect and accept as manager; reload and confirm persistence. Stale writes must return 409 without silent overwrites. In Bot mode also verify pending, leased, completed and uncertain/failed states, explicit retry, invalidated leases and rejection of old submissions. Dispatch must never masquerade as a completed assessment.
 - Check Chinese/English, theme, logout and login. Only theme/language preferences may use localStorage, never task data or sessions.
 - Approve a specific test recipient before setting `DINGTALK_NOTIFICATIONS_ENABLED=true`. `queued` means provider acceptance, not confirmed delivery.

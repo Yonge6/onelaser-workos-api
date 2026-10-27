@@ -17,6 +17,10 @@ http://:{$PORT:10000} {
         rewrite * /health
         reverse_proxy 127.0.0.1:3001
     }
+    @bot_oauth_metadata path /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/api/integrations/grok-bot/mcp /.well-known/oauth-authorization-server /.well-known/oauth-authorization-server/api/integrations/grok-bot/oauth
+    handle @bot_oauth_metadata {
+        reverse_proxy 127.0.0.1:3001
+    }
     handle_path /api/* {
         reverse_proxy 127.0.0.1:3001
     }

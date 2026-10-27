@@ -9,11 +9,13 @@ import { DingTalkClient, DingTalkError, type DingTalkProfile } from './dingtalk.
 import { AiIntegrationError, GrokReviewer, type ReviewInput } from './grok.js';
 import { GrokBotAdapter } from './grok-bot.js';
 import { registerBotReviewRoutes } from './grok-bot-jobs.js';
+import { BotOAuthService, registerBotOAuthRoutes, validatedBotRedirects, type BotOAuthConfig } from './grok-bot-oauth.js';
 
 export type IntegrationOptions = {
   dingtalk?: Pick<DingTalkClient,'authorizationUrl'|'authenticate'|'listDepartmentUsers'|'sendWorkNotification'>;
   corpId?: string; appPublicUrl?: string; secureCookies?: boolean; ai?: Pick<GrokReviewer,'model'|'inputHash'|'assess'>;
   aiReviewMode?:'api'|'bot';bot?:GrokBotAdapter;
+  botMcpAuthMode?:'bearer'|'oauth';botOAuth?:BotOAuthConfig;
   notificationsEnabled?: boolean; frontendConnected?: boolean; teamMode?:'company'|'department';allowedDepartmentIds?:string[];teamName?:string; setup?: {dingtalkMissing:string[];aiMissing:string[];notificationMissing:string[]};
 };
 const id=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
@@ -60,13 +62,19 @@ export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOpti
   }
   if(env.AI_REVIEW_MODE&&!['api','bot'].includes(env.AI_REVIEW_MODE))throw new Error('Invalid AI review mode');
   const aiReviewMode=env.AI_REVIEW_MODE==='bot'?'bot':'api';
+  if(env.GROK_BOT_MCP_AUTH_MODE&&!['bearer','oauth'].includes(env.GROK_BOT_MCP_AUTH_MODE))throw new Error('Invalid Bot MCP auth mode');
+  const botMcpAuthMode=env.GROK_BOT_MCP_AUTH_MODE==='oauth'?'oauth':'bearer';
   const key=env.AI_PROVIDER_API_KEY||env.XAI_API_KEY;let ai:GrokReviewer|undefined,bot:GrokBotAdapter|undefined;
   const botOrgId=env.GROK_BOT_ORG_ID||env.DINGTALK_CORP_ID;
-  const botMissing=['GROK_BOT_WEBHOOK_URL','GROK_BOT_WEBHOOK_SECRET','GROK_BOT_WEBHOOK_ALLOWED_HOST','GROK_BOT_WORKER_TOKEN'].filter(name=>!env[name]?.trim());
+  const transportMissing=['GROK_BOT_WEBHOOK_URL','GROK_BOT_WEBHOOK_SECRET','GROK_BOT_WEBHOOK_ALLOWED_HOST',...(botMcpAuthMode==='bearer'?['GROK_BOT_WORKER_TOKEN']:[])].filter(name=>!env[name]?.trim());
+  const botMissing=[...transportMissing];
   if(!botOrgId?.trim())botMissing.push('GROK_BOT_ORG_ID');
-  if(aiReviewMode==='bot'&&!botMissing.length)bot=new GrokBotAdapter({webhookUrl:env.GROK_BOT_WEBHOOK_URL!,webhookSecret:env.GROK_BOT_WEBHOOK_SECRET!,allowedHost:env.GROK_BOT_WEBHOOK_ALLOWED_HOST!,workerToken:env.GROK_BOT_WORKER_TOKEN!,orgId:botOrgId!});
+  const redirectUris=botMcpAuthMode==='oauth'?validatedBotRedirects(env.GROK_BOT_OAUTH_REDIRECT_URIS):[];
+  const botOAuth:BotOAuthConfig|undefined=botMcpAuthMode==='oauth'?{publicUrl,orgId:botOrgId,redirectUris,secureCookies:env.NODE_ENV==='production',preRegisteredClientId:env.GROK_BOT_OAUTH_PRE_REGISTERED_CLIENT_ID||undefined}:undefined;
+  if(botMcpAuthMode==='oauth'){if(!redirectUris.length)botMissing.push('GROK_BOT_OAUTH_REDIRECT_URIS');if(!publicUrl)botMissing.push('APP_PUBLIC_URL');}
+  if(aiReviewMode==='bot'&&!transportMissing.length&&botOrgId?.trim())bot=new GrokBotAdapter({webhookUrl:env.GROK_BOT_WEBHOOK_URL!,webhookSecret:env.GROK_BOT_WEBHOOK_SECRET!,allowedHost:env.GROK_BOT_WEBHOOK_ALLOWED_HOST!,workerToken:botMcpAuthMode==='bearer'?env.GROK_BOT_WORKER_TOKEN:undefined,orgId:botOrgId});
   if(aiReviewMode==='api'&&key&&env.AI_MODEL_ID){ai=new GrokReviewer({apiKey:key,model:env.AI_MODEL_ID,baseUrl:env.AI_PROVIDER_BASE_URL,timeoutMs:Number(env.AI_REVIEW_TIMEOUT_MS)||45000});}
-  return {teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,aiReviewMode,bot,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:aiReviewMode==='bot'?botMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
+  return {teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,aiReviewMode,bot,botMcpAuthMode,botOAuth,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:aiReviewMode==='bot'?botMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
 }
 export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,options:IntegrationOptions){
   const secure=options.secureCookies===true,sessionName=sessionCookieName(secure),nonceName=oauthCookieName(secure);
@@ -82,13 +90,19 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
     let value=limits.get(key);if(!value||value.until<=now){if(limits.size>=2000)deny(429,'RATE_LIMITED','Too many requests; try again later');value={count:0,until:now+windowMs};limits.set(key,value);}
     value.count++;if(value.count>max)deny(429,'RATE_LIMITED','Too many requests; try again later');
   }
-  const botJobs=await registerBotReviewRoutes(app,db,options.aiReviewMode==='bot'?options.bot:undefined,options.appPublicUrl,user=>limited('ai-user:'+user.id,5,60000));
+  const oauth=options.aiReviewMode==='bot'&&options.botMcpAuthMode==='oauth'?new BotOAuthService(db,{...(options.botOAuth||{publicUrl:options.appPublicUrl,orgId:options.corpId,redirectUris:[]}),secureCookies:secure}):undefined;
+  await oauth?.initialize();
+  const resumeConsent=async(requestId:string,header:string|undefined)=>{if(!oauth)deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');try{return await oauth.resume(requestId,header);}catch{deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');}};
+  await registerBotOAuthRoutes(app,db,oauth);
+  const botJobs=await registerBotReviewRoutes(app,db,options.aiReviewMode==='bot'?options.bot:undefined,options.appPublicUrl,user=>limited('ai-user:'+user.id,5,60000),{mode:options.botMcpAuthMode,oauth});
   app.get('/auth/dingtalk/start',async(req,reply)=>{
     limited('oauth:'+req.ip,30,60000);
     if(!options.dingtalk||!options.corpId||!options.appPublicUrl)deny(501,'DINGTALK_NOT_CONFIGURED','Real DingTalk authentication is not integrated');
+    const returnRequest=(req.query as Record<string,unknown>)?.oauth_request;
+    if(returnRequest!==undefined){if(typeof returnRequest!=='string')deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');await resumeConsent(returnRequest,req.headers.cookie);}
     const state=randomBytes(32).toString('base64url'),nonce=randomBytes(32).toString('base64url');
     await db.query('DELETE FROM oauth_states WHERE expires_at<now()');
-    await db.query('INSERT INTO oauth_states(state_hash,nonce_hash,expires_at) VALUES($1,$2,$3)',[hash(state),hash(nonce),new Date(Date.now()+600000).toISOString()]);
+    await db.query('INSERT INTO oauth_states(state_hash,nonce_hash,expires_at,return_request_id) VALUES($1,$2,$3,$4)',[hash(state),hash(nonce),new Date(Date.now()+600000).toISOString(),returnRequest||null]);
     reply.header('Set-Cookie',cookie(nonceName,nonce,secure,600));
     return reply.redirect(options.dingtalk.authorizationUrl(state));
   });
@@ -97,17 +111,19 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
     const input=z.object({state:z.string().regex(/^[A-Za-z0-9_-]{43}$/),authCode:z.string().min(1).max(2048)}).passthrough().parse(req.method==='POST'?req.body:req.query);
     const nonce=readCookie(req.headers.cookie,nonceName);
     if(!nonce)deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');
-    await db.transaction(async tx=>{
+    const returnRequest=await db.transaction(async tx=>{
       const state=(await tx.query('SELECT * FROM oauth_states WHERE state_hash=$1 AND expires_at>now() FOR UPDATE',[hash(input.state)])).rows[0];
       if(!state||!sameSecret(state.nonce_hash,hash(nonce)))deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');
       await tx.query('DELETE FROM oauth_states WHERE state_hash=$1',[hash(input.state)]);
+      return state.return_request_id as string|null;
     });
+    const target=returnRequest?await resumeConsent(returnRequest,req.headers.cookie):options.appPublicUrl;
     const profile=await safeUpstream(()=>options.dingtalk!.authenticate(input.authCode));
     const session=await db.transaction(async tx=>{
       const user=await upsertMember(tx,options.corpId!,profile,options);return issueSession(tx,user.id);
     });
     reply.header('Set-Cookie',[cookie(nonceName,'',secure,0),cookie(sessionName,session.accessToken,secure)]);
-    return reply.redirect(options.appPublicUrl);
+    return reply.redirect(target);
   };
   app.get('/auth/dingtalk/callback',callback);app.post('/auth/dingtalk/callback',callback);
   app.get('/directory',async req=>{const user=currentUser(req);return {items:(await db.query('SELECT id,display_name,department_id,role FROM users WHERE org_id=$1 AND department_id=$2 AND active=true ORDER BY display_name,id',[user.org_id,user.department_id])).rows};});
@@ -155,7 +171,7 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
   app.post<{Params:{id:string}}>('/tasks/:id/analyze',async(req,reply)=>{
     const user=currentUser(req),task=await loadTask(db,user,id.parse(req.params.id));
     if(options.aiReviewMode==='bot'){
-      if(!botJobs)deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');
+      if(!botJobs||(options.botMcpAuthMode==='oauth'&&!oauth?.configured))deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');
       const result=await botJobs.analyze(user,task.id,req.language);return reply.code(result.statusCode).send(result.body);
     }
     if(!options.ai)deny(501,'AI_NOT_CONFIGURED','AI evidence assessment is not integrated; use human review');

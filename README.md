@@ -10,6 +10,8 @@
 
 评审默认使用独立模型 API（`AI_REVIEW_MODE=api`）；可选 [Grok Bot 异步评审](docs/integrations/GROK_BOT_SETUP.md)（`AI_REVIEW_MODE=bot`），通过专用 Routine 与受保护的远程 MCP 领取/回传任务。Bot 模式不要求模型 API 余额；账户实际额度和线上连接仍须核验。每企业每 UTC 小时最多 10 次新触发，无自动重试。
 
+Render 选择 MCP OAuth：管理员显式配置精确回调后，钉钉主管登录并明确批准 `workos.review`，再点击“返回 Bot”。数据库只存令牌摘要；刷新轮换、重放撤销和授权撤销均由服务端检查。代码仍保留显式 `bearer` 兼容模式，原生 Bot 不需要在聊天中接收 worker 密钥。真实客户端连接仍须部署后验证。
+
 ## 本地运行
 
 需要 Node.js 22 或更新版本，推荐 Node.js 24。以下命令适用于 macOS、Linux 或兼容的 Shell：
