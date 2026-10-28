@@ -62,3 +62,9 @@ See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Depl
 - Confirm backup retention, costs and a restore drill. `frontend-revision.txt` pins the frontend; updating it requires rebuilding the image. Keep database migrations compatible with any rollback.
 
 The application does not automatically decide retention, termination or compensation. Managers can inspect evidence and human acceptance records.
+
+### Read-only executive overview
+
+Set `WORKOS_EXECUTIVE_USER_IDS` to explicitly verified internal Work OS `users.id` values, comma separated. It defaults to empty; do not substitute names, phone numbers, or DingTalk employee numbers. Authenticate the owner and confirm the mapping before granting access. `/me` returns `executiveAccess`; `/executive/summary` checks that allowlist and the active session, then restricts all aggregates to that user's organization. Ordinary task detail/write/review permissions remain unchanged.
+
+Counts include all recorded tasks, beyond the normal 100-task list limit. Follow-up details are capped at 50. Company progress averages valid KRs within objectives and then company objectives; missing metrics remain null. Overdue means current due date has passed and task is not accepted; it can overlap pending review. No salary estimates or employment decisions. Live workflow currently has no blocked state; demo data includes one. Company team mode represents the approved organization as one collaboration department.

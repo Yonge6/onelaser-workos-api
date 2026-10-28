@@ -1,3 +1,4 @@
+import { executiveSummary } from './executive.js';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
@@ -106,7 +107,9 @@ export async function buildApp(options:AppOptions) {
     return issueSession(db,user.id);
   });
   app.delete('/auth/session',async(req,reply)=>{await db.query('DELETE FROM sessions WHERE token_hash=$1',[hash(req.sessionToken!)]);reply.header('Set-Cookie',cookie(sessionCookieName(integrations.secureCookies),'',integrations.secureCookies,0));return {revoked:true};});
-  app.get('/me',async req=>actor(req));
+  const isExecutive=(user:User)=>integrations.executiveUserIds?.includes(user.id)===true;
+  app.get('/me',async req=>({...actor(req),executiveAccess:isExecutive(actor(req))}));
+  app.get('/executive/summary',async req=>{const user=actor(req);if(!isExecutive(user))deny(403,'FORBIDDEN','Executive access is required');return db.transaction(tx=>executiveSummary(tx,user.org_id));});
   app.get('/tasks',async req=>{
     const user=actor(req),[where,params]=scope(user);
     return {items:(await db.query(`SELECT * FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};
