@@ -2,6 +2,8 @@
 
 中文 · [English](README.en.md)
 
+暂用 Mac 联调的启动、私有配置及隧道步骤见 [Mac 本机联调](deploy/MAC_LOCAL.md)。
+
 员工任务、OKR、成果提交和人工验收的后台研发 MVP。使用 Node.js、TypeScript、Fastify 和 PostgreSQL 查询；本地与测试可使用 PGlite，正式数据库连接使用 `pg` 适配器。
 
 [后台仓库](https://github.com/Yonge6/onelaser-workos-api) · [前端仓库](https://github.com/Yonge6/onelaser-workos) · [前端交互演示](https://yonge6.github.io/onelaser-workos/)

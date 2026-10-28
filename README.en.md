@@ -2,6 +2,8 @@
 
 [中文](README.md) · English
 
+For a temporary Mac-hosted integration, see [Mac integration](deploy/MAC_LOCAL.en.md) for startup, private configuration and the independent HTTPS tunnel.
+
 A backend development MVP for employee tasks, OKRs, evidence submissions, and human acceptance reviews. It uses Node.js, TypeScript, Fastify, and PostgreSQL queries. PGlite supports local development and tests; the `pg` adapter connects to a PostgreSQL server.
 
 [Backend repository](https://github.com/Yonge6/onelaser-workos-api) · [Frontend repository](https://github.com/Yonge6/onelaser-workos) · [Frontend demo](https://yonge6.github.io/onelaser-workos/)
