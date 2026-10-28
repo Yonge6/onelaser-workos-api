@@ -36,3 +36,13 @@ test('executive access defaults off and reads only an explicit server-side list'
  assert.deepEqual(integrationOptionsFromEnv({}).executiveUserIds,[]);
  assert.deepEqual(integrationOptionsFromEnv({WORKOS_EXECUTIVE_USER_IDS:' verified-id, ,second-id '}).executiveUserIds,['verified-id','second-id']);
 });
+test('company collaboration mode reports each member and task under verified original DingTalk department',async()=>{
+ const db=await createDatabase();await db.exec(schema);await seedDemo(db);
+ await db.exec(`UPDATE users SET department_id='company';UPDATE tasks SET department_id='company',due_at=now()-interval '1 day';
+ INSERT INTO departments VALUES('demo','company','company','Pilot');
+ INSERT INTO external_identities(provider,corp_id,external_user_id,union_id,user_id,external_department_id,external_department_name)
+ SELECT 'dingtalk','demo',id,'union-'||id,id,CASE WHEN id IN ('m4','m5','m6') THEN 'engineering' ELSE 'marketing' END,
+ CASE WHEN id IN ('m4','m5','m6') THEN 'Engineering' ELSE 'Marketing' END FROM users;`);
+ const app=await buildApp({db,integrations:{teamMode:'company',executiveUserIds:['m1']}});
+ try{const token=(await issueSession(db,'m1')).accessToken;const res=await app.inject({url:'/executive/summary',headers:{authorization:'Bearer '+token}});assert.equal(res.statusCode,200,res.body);const body=res.json();assert.equal(body.departments.length,2);assert.equal(body.departments.find((d:any)=>d.id==='engineering').total,1);assert.equal(body.departments.find((d:any)=>d.id==='marketing').members,3);assert.equal(body.risks.find((r:any)=>r.id==='t3').department,'Engineering');}finally{await app.close();}
+});
