@@ -10,6 +10,10 @@ COPY deploy/frontend-revision.txt ./deploy/frontend-revision.txt
 RUN node tools/fetch-frontend.mjs /frontend
 
 FROM caddy:2 AS edge
+# Render drops capabilities; the edge listens on an unprivileged PORT.
+# Remove the upstream file capability so execve does not fail with EPERM.
+RUN capabilities="$(getcap /usr/bin/caddy)" && \
+    if [ -n "$capabilities" ]; then setcap -r /usr/bin/caddy; fi
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production PORT=10000 FRONTEND_CONNECTED=true XDG_DATA_HOME=/tmp/caddy-data XDG_CONFIG_HOME=/tmp/caddy-config

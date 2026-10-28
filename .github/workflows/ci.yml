@@ -44,7 +44,7 @@ jobs:
         run: docker build -t workos-ci .
       - name: Check same-origin production container
         run: |
-          docker run --detach --name workos-smoke --network host \
+          docker run --detach --name workos-smoke --network host --cap-drop=ALL \
             -e PORT=18689 -e NODE_ENV=production \
             -e APP_PUBLIC_URL=https://workos.example.test \
             -e WORKOS_TEAM_MODE=company \
