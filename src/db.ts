@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS key_results (
  direction text NOT NULL CHECK(direction IN ('increase','decrease')), unit text NOT NULL,
  version integer NOT NULL DEFAULT 1 CHECK(version >= 1)
 );
+ALTER TABLE objectives ADD COLUMN IF NOT EXISTS planning jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE key_results ADD COLUMN IF NOT EXISTS planning jsonb NOT NULL DEFAULT '{}';
+CREATE TABLE IF NOT EXISTS kr_appraisals (
+ id text PRIMARY KEY, kr_id text NOT NULL REFERENCES key_results(id),
+ kind text NOT NULL CHECK(kind IN ('self','manager')), score integer NOT NULL CHECK(score IN (0,20,40,60,80,100)),
+ note text NOT NULL, evidence text NOT NULL, author_id text NOT NULL REFERENCES users(id),
+ self_appraisal_id text REFERENCES kr_appraisals(id), metric_version integer NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS kr_appraisal_lookup ON kr_appraisals(kr_id,created_at);
 CREATE TABLE IF NOT EXISTS tasks (
  id text PRIMARY KEY, org_id text NOT NULL, department_id text NOT NULL,
  owner_id text NOT NULL REFERENCES users(id), reviewer_id text NOT NULL REFERENCES users(id), created_by text NOT NULL REFERENCES users(id),

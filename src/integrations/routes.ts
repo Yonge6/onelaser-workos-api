@@ -1,3 +1,4 @@
+import { objectivePlanning, krPlanning } from '../okr.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -150,22 +151,22 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
     });
     return {synchronized:sameDepartment.length,departmentId:user.department_id};
   });
-  const objectiveInput=z.object({title:z.string().trim().min(1).max(300),level:z.enum(['personal','department']),ownerId:id.optional()}).strict();
+  const objectiveInput=z.object({title:z.string().trim().min(1).max(300),level:z.enum(['personal','department']),ownerId:id.optional(),planning:objectivePlanning.optional()}).strict();
   app.post('/objectives',async(req,reply)=>{
     const user=currentUser(req),input=objectiveInput.parse(req.body),ownerId=input.ownerId||user.id;
     if(user.role!=='manager'&&(input.level!=='personal'||ownerId!==user.id))deny(403,'FORBIDDEN','Employees can create tasks only for themselves');
     const owner=(await db.query<User>('SELECT * FROM users WHERE id=$1 AND active=true',[ownerId])).rows[0];
     if(!owner||owner.org_id!==user.org_id||owner.department_id!==user.department_id)deny(400,'INVALID_OWNER','Owner must be an active member of the current department');
-    const result=await db.transaction(async tx=>{const objective=(await tx.query('INSERT INTO objectives(id,org_id,department_id,owner_id,level,title) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[randomUUID(),user.org_id,user.department_id,ownerId,input.level,input.title])).rows[0];await audit(tx,user,'objective.created',objective.id,{},ownerId);return objective;});
+    const result=await db.transaction(async tx=>{const objective=(await tx.query('INSERT INTO objectives(id,org_id,department_id,owner_id,level,title,planning) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[randomUUID(),user.org_id,user.department_id,ownerId,input.level,input.title,JSON.stringify(input.planning||{})])).rows[0];await audit(tx,user,'objective.created',objective.id,{},ownerId);return objective;});
     return reply.code(201).send(result);
   });
-  const krInput=z.object({title:z.string().trim().min(1).max(300),baseline:z.number().finite(),target:z.number().finite(),actual:z.number().finite().optional(),direction:z.enum(['increase','decrease']),unit:z.string().trim().min(1).max(30)}).strict();
+  const krInput=z.object({title:z.string().trim().min(1).max(300),baseline:z.number().finite(),target:z.number().finite(),actual:z.number().finite().optional(),direction:z.enum(['increase','decrease']),unit:z.string().trim().min(1).max(30),planning:krPlanning.optional()}).strict();
   app.post<{Params:{id:string}}>('/objectives/:id/key-results',async(req,reply)=>{
     const user=currentUser(req),input=krInput.parse(req.body),objectiveId=id.parse(req.params.id);
     const objective=(await db.query('SELECT * FROM objectives WHERE id=$1',[objectiveId])).rows[0];
     if(!visibleObjective(user,objective)||objective.department_id!==user.department_id||(user.role!=='manager'&&(objective.level!=='personal'||objective.owner_id!==user.id)))deny(404,'NOT_FOUND','Key result not found');
     if(krProgress({...input,actual:input.actual??input.baseline})===null)deny(400,'METRIC_INVALID','Metric target must differ from baseline in the declared direction');
-    const result=await db.transaction(async tx=>{const kr=(await tx.query('INSERT INTO key_results(id,objective_id,title,baseline,target,actual,direction,unit) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',[randomUUID(),objectiveId,input.title,input.baseline,input.target,input.actual??input.baseline,input.direction,input.unit])).rows[0];await audit(tx,user,'kr.created',kr.id,{},objective.owner_id||user.id);return {...kr,progress:krProgress(kr)};});return reply.code(201).send(result);
+    const result=await db.transaction(async tx=>{const kr=(await tx.query('INSERT INTO key_results(id,objective_id,title,baseline,target,actual,direction,unit,planning) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',[randomUUID(),objectiveId,input.title,input.baseline,input.target,input.actual??input.baseline,input.direction,input.unit,JSON.stringify(input.planning||{})])).rows[0];await audit(tx,user,'kr.created',kr.id,{},objective.owner_id||user.id);return {...kr,progress:krProgress(kr)};});return reply.code(201).send(result);
   });
   app.get<{Params:{id:string}}>('/tasks/:id/evaluations',async req=>{const task=await loadTask(db,currentUser(req),id.parse(req.params.id));return {items:(await db.query('SELECT * FROM ai_evaluations WHERE task_id=$1 ORDER BY created_at DESC,id',[task.id])).rows};});
   const runningAssessments=new Map<string,Promise<unknown>>();

@@ -184,3 +184,23 @@ Grok 评审可选择模型 API（`AI_REVIEW_MODE=api`）或 [Bot 异步通道](d
 通知请求为 `{taskIds:[...],idempotencyKey:"UUID"}`，仅负责人可发给当前范围内的任务本人。需另开 `DINGTALK_NOTIFICATIONS_ENABLED=true` 并配置 AgentId；未开启不会发送。返回 `queued` 只表示钉钉接受发送请求，`sent:false` 不冒充已送达；超时标为 `unknown`，同一幂等键不自动重发。不得将通知预览当作真实送达。
 
 新增 OAuth/CSRF、企业范围、Grok 引用和通知幂等测试使用 mock 官方服务；这些测试不会发送真实钉钉消息或消耗真实模型额度。真实授权、模型可用性、API 费用、用户首次登录和通知接收仍需上线验证。
+
+
+### OKR fields / 钉钉字段对齐 (2026-10-28)
+
+Objective creation accepts validated `planning`: `period` (YYYY-MM), `weight`
+(absolute period %), `location`, `description`, `type` (mandatory/bonus),
+`bonusIncluded`, `scoringDueDate` (YYYY-MM-DD). KR creation accepts
+`planning: {weight, description}`. Existing rows keep unknown planning.
+
+`GET /key-results/:id/appraisal` reads authorized version history.
+`POST /key-results/:id/self-evaluation` requires expectedVersion, score, note and
+evidence. `POST /key-results/:id/manager-evaluation` requires expectedVersion,
+score, note, current selfAppraisalId and verifiedEvidence:true. Allowed scores
+are 0/20/40/60/80/100. A different in-scope manager confirms evidence. Both writes
+advance the KR version. New self evidence or actual measurements invalidate the
+current manager result. Other employees cannot inspect these private evaluations.
+
+新增周期、权重、地点、任务类型、奖励项参与开关、成果、自评、主管评分和评分截止日期。
+评分版本和历史审计独立保存。新版明确采用主管核定分，不推断原钉钉综合公式；
+当前不自动迁移历史表、不代替人工验收、不生成员工去留结论。

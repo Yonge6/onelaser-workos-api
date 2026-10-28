@@ -1,3 +1,4 @@
+import { registerOkrRoutes } from './okr.js';
 import { executiveSummary } from './executive.js';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
@@ -180,6 +181,7 @@ export async function buildApp(options:AppOptions) {
     return {status:'draft',sent:false,recipient:user.id,items:tasks};
   });
   app.get('/audit',async req=>{const [where,params]=scope(actor(req));return {items:(await db.query(`SELECT * FROM audit_events WHERE ${where} ORDER BY created_at DESC,id LIMIT 100`,[...params])).rows,limit:100};});
+  await registerOkrRoutes(app,db);
   await registerIntegrationRoutes(app,db,integrations);
   if(options.closeDatabase!==false) app.addHook('onClose',async()=>db.close());
   return app;

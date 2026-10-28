@@ -10,6 +10,9 @@ export function languageFrom(header?:string):Language {
   return preferences[0]?.tag as Language || 'zh';
 }
 const zh:Record<string,string>={
+  'Only the objective owner can self-evaluate':'只有目标负责人可以提交成果与自评。',
+  'A different manager must verify the result':'须由另一位有权限的负责人核定成果。',
+  'Self evaluation changed; submit current evidence first':'成果或指标已更新，请负责人先提交当前版本的成果与自评。',
   'Authentication is required':'请先登录后再访问。',
   'Task not found':'未找到可访问的任务。',
   'Invalid request data':'请求数据不符合要求。',
