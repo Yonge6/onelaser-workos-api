@@ -99,6 +99,9 @@ test('canonical origin switches only the approved Render host and retains health
           assert.equal(wiki.status, 200); assert.equal(wiki.body, 'complete public wiki');
           assert.equal(wiki.frameOptions, 'SAMEORIGIN');
           assert.equal(wiki.cacheControl, 'no-store');
+          assert.equal((await get('craftos.app','/wiki/data/library.json')).cacheControl, 'public, max-age=300');
+          assert.equal((await get('craftos.app','/wiki/assets/example.png')).cacheControl, 'public, max-age=86400');
+          assert.equal((await get('craftos.app','/api/tasks')).cacheControl, 'no-store');
           const wikiCsp = new Map(wiki.csp.split(';').map(part => {
             const [name, ...sources] = part.trim().split(/\s+/);
             return [name, sources.join(' ')] as const;

@@ -9,8 +9,9 @@ http://:{$PORT:10000} {
         X-Content-Type-Options nosniff
         ?Referrer-Policy no-referrer
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        Cache-Control no-store
     }
+    @private_or_uncached not path /wiki/data/* /wiki/assets/*
+    header @private_or_uncached Cache-Control no-store
     # The original public Wiki keeps its existing framing restriction. Every
     # other same-origin route retains DENY/none, including the employee app/API.
     @not_wiki not path /wiki/*
@@ -43,6 +44,11 @@ http://:{$PORT:10000} {
     handle /wiki {
         redir * /wiki/?{http.request.uri.query} 308
     }
+    # These are pinned public documentation files, never employee/API content.
+    @wiki_public_json path /wiki/data/*
+    header @wiki_public_json Cache-Control "public, max-age=300"
+    @wiki_public_assets path /wiki/assets/*
+    header @wiki_public_assets Cache-Control "public, max-age=86400"
     handle_path /wiki/* {
         header {
             X-Frame-Options SAMEORIGIN
