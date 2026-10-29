@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sameSecret } from '../auth.js';
 import { ApiError } from '../errors.js';
-import { AiIntegrationError } from './grok.js';
+import { AiIntegrationError, evaluationSchema } from './grok.js';
 import type { BotOAuthPrincipal } from './grok-bot-oauth.js';
 
 export const GROK_BOT_MCP_PATH = '/integrations/grok-bot/mcp';
@@ -38,7 +38,7 @@ const tools = [
     name: 'workos_submit_review',
     description: 'Submit an evidence assessment using the current job lease. The server verifies the result; this never accepts a task or makes personnel decisions.',
     inputSchema: { type: 'object', additionalProperties: false, required: ['jobId', 'leaseToken', 'result'], properties: {
-      jobId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,100}$' }, leaseToken: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' }, result: {}
+      jobId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,100}$' }, leaseToken: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' }, result: z.toJSONSchema(evaluationSchema, { target: 'draft-7' })
     } }
   }
 ];

@@ -86,6 +86,11 @@ test('headerless 2025-03-26 and explicit legacy requests list only the two revie
     assert.equal(response.statusCode, 200); assert.equal(response.json().result.resultType, undefined);
     assert.deepEqual(response.json().result.tools.map((tool: any) => tool.name), ['workos_get_review_job', 'workos_submit_review']);
     assert(response.json().result.tools.every((tool: any) => tool.inputSchema.additionalProperties === false));
+    const resultSchema=response.json().result.tools[1].inputSchema.properties.result;
+    assert.equal(resultSchema.additionalProperties,false);
+    assert.equal(resultSchema.properties.humanReviewRequired.const,true);
+    assert.deepEqual(resultSchema.required,['summary','criteria','missingEvidence','uncertainties','humanReviewRequired']);
+    assert.match(resultSchema.properties.criteria.items.properties.evidenceRefs.description,/Repeat the same source ID/);
   }
 });
 

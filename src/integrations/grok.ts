@@ -8,7 +8,9 @@ export type ReviewInput = {
 };
 const criterionSchema = z.object({
   criterionId: z.string(), finding: z.enum(['supported','partially_supported','contradicted','insufficient_evidence']),
-  reason: z.string().min(1).max(3000), evidenceRefs: z.array(z.string()).max(10), quotes: z.array(z.string().min(1).max(2000)).max(10)
+  reason: z.string().min(1).max(3000),
+  evidenceRefs: z.array(z.string()).max(10).describe('One source ID per quote, in matching order. Repeat the same source ID for multiple quotes from that source. Must have the same length as quotes.'),
+  quotes: z.array(z.string().min(1).max(2000)).max(10).describe('Verbatim text: quotes[i] must appear exactly in source evidenceRefs[i]. Must have the same length as evidenceRefs.')
 }).strict();
 export const evaluationSchema = z.object({
   summary: z.string().min(1).max(4000), criteria: z.array(criterionSchema).min(1).max(20),
