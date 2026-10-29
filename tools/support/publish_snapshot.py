@@ -7,6 +7,10 @@ UUID='4782005C-E75C-406A-A195-A4A2AA8369C5'
 def iso(value):
     return datetime.datetime.fromtimestamp(float(value),datetime.timezone.utc).isoformat().replace('+00:00','Z') if value else None
 
+def deadline(value):
+    if isinstance(value,(int,float)):return iso(value)
+    return value if isinstance(value,str) else None
+
 def snapshot(root):
     root=pathlib.Path(root).resolve()
     sys.path.insert(0,str(root/'support-knowledge'))
@@ -19,7 +23,7 @@ def snapshot(root):
     cases={r['ticket_id']:{**json.loads(r['data']),'observed_at':r['observed_at']} for r in db.execute('SELECT * FROM support_watch_cases')}
     ids={t['id'] for t in tickets}
     drafts=[dict(r) for r in db.execute('SELECT * FROM drafts ORDER BY created_at DESC LIMIT 1000') if r['ticket_id'] in ids]
-    jobs={r['status']:r['n'] for r in db.execute('SELECT status,count(*) n FROM jobs GROUP BY status')}
+    jobs={r['status']:r['n'] for r in db.execute('SELECT j.status,count(*) n FROM jobs j JOIN tickets t ON j.ticket_id=t.id AND j.revision=t.revision GROUP BY j.status')}
     poller=db.execute('SELECT last_success FROM poller_state ORDER BY last_success DESC LIMIT 1').fetchone()
     watch=db.execute("SELECT last_success FROM support_watch_state WHERE name='main'").fetchone()
     db.rollback();db.close()
@@ -28,7 +32,7 @@ def snapshot(root):
       'dispatchPaused':(root/'.private/grok-dispatch.pause').exists(),
       'articles':[{'id':a['id'],'title':a['title'][:500],'family':a['family'],'body':a['body_text'][:100000],'sourceUrl':a['source_url'],'sourceVersion':str(a['source_updated_at'] or a['body_sha256'])[:200]} for a in library.articles.values()],
       'answers':[{'id':a['id'],'title':a['title'],'family':a['family'],'body':a['reply_en'],'note':'\n'.join(a['review_notes']) if isinstance(a['review_notes'],list) else str(a['review_notes']),'sources':sources(a['sources'])} for a in (catalogue.material(i) for i in catalogue.items)],
-      'tickets':[{'id':t['id'],'number':str(cases.get(t['id'],{}).get('ticket_number','')),'subject':str(cases.get(t['id'],{}).get('subject',''))[:500],'status':str(cases.get(t['id'],{}).get('status',t['state']))[:100],'revision':t['revision'],'reasons':cases.get(t['id'],{}).get('reasons',[]),'observedAt':iso(cases.get(t['id'],{}).get('observed_at')),'responseDueAt':cases.get(t['id'],{}).get('response_due_at'),'resolutionDueAt':cases.get(t['id'],{}).get('resolution_due_at')} for t in tickets],
+      'tickets':[{'id':t['id'],'number':str(cases.get(t['id'],{}).get('ticket_number','')),'subject':str(cases.get(t['id'],{}).get('subject',''))[:500],'status':str(cases.get(t['id'],{}).get('status',t['state']))[:100],'revision':t['revision'],'reasons':cases.get(t['id'],{}).get('reasons',[]),'observedAt':iso(cases.get(t['id'],{}).get('observed_at')),'responseDueAt':deadline(cases.get(t['id'],{}).get('response_due_at')),'resolutionDueAt':deadline(cases.get(t['id'],{}).get('resolution_due_at'))} for t in tickets],
       'drafts':[{'id':d['id'],'ticketId':d['ticket_id'],'revision':d['revision'],'version':d['version'],'status':d['status'],'body':d['content'],'sources':sources(json.loads(d['sources'])),'createdAt':iso(d['created_at'])} for d in drafts],
       'jobs':{'pending':sum(jobs.get(k,0) for k in ['pending','awaiting_callback','running']), 'attention':sum(jobs.get(k,0) for k in ['stalled','ambiguous','blocked','failed'])},
       'sla':{'status':'draft','body':(root/'support-agent-bridge/docs/SLA与SOP草案.md').read_text()[:100000]}}
