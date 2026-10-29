@@ -10,6 +10,7 @@ export function languageFrom(header?:string):Language {
   return preferences[0]?.tag as Language || 'zh';
 }
 const zh:Record<string,string>={
+  'This key result has no quantitative metric configured':'此关键结果尚未配置量化指标，不能记录数值进度。',
   'Only the objective owner can self-evaluate':'只有目标负责人可以提交成果与自评。',
   'A different manager must verify the result':'须由另一位有权限的负责人核定成果。',
   'Self evaluation changed; submit current evidence first':'成果或指标已更新，请负责人先提交当前版本的成果与自评。',

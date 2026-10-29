@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import type { Database, Queryable } from './db.js';
 import { cookie, hash, issueSession, readCookie, resolveSession, sameSecret, sessionCookieName, type User } from './auth.js';
-import { visibleObjective, visibleTask, krProgress } from './domain.js';
+import { visibleObjective, visibleTask, krProgress, hasKrMetric } from './domain.js';
+import { attachOkrImportMetadata } from './okr-import.js';
 import { languageFrom, message, type Language } from './i18n.js';
 import { ApiError, deny } from './errors.js';
 import { registerIntegrationRoutes, type IntegrationOptions } from './integrations/routes.js';
@@ -160,11 +161,11 @@ export async function buildApp(options:AppOptions) {
   });
   app.get('/objectives',async req=>{
     const user=actor(req),rows=(await db.query('SELECT * FROM objectives WHERE org_id=$1 ORDER BY id',[user.org_id])).rows;
-    return {items:rows.filter(o=>visibleObjective(user,o))};
+    return {items:await attachOkrImportMetadata(db,'objective',rows.filter(o=>visibleObjective(user,o)))};
   });
   app.get('/key-results',async req=>{
     const user=actor(req),rows=(await db.query('SELECT k.*,o.org_id,o.department_id,o.owner_id,o.level FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE o.org_id=$1 ORDER BY k.id',[user.org_id])).rows;
-    return {items:rows.filter(o=>visibleObjective(user,o)).map(kr=>({...kr,progress:krProgress(kr)}))};
+    return {items:await attachOkrImportMetadata(db,'key_result',rows.filter(o=>visibleObjective(user,o)).map(kr=>({...kr,progress:krProgress(kr)})))};
   });
   app.post<{Params:{id:string}}>('/key-results/:id/measurements',async(req,reply)=>{
     const user=actor(req),input=measurementInput.parse(req.body),id=identifier.parse(req.params.id);
@@ -172,6 +173,7 @@ export async function buildApp(options:AppOptions) {
     const result=await db.transaction(async tx=>{
       const kr=await loadKr(tx,id,true);
       if(!visibleObjective(user,kr)||kr.department_id!==user.department_id) deny(404,'NOT_FOUND','Key result not found');
+      if(!hasKrMetric({...kr})||typeof kr.unit!=='string'||!kr.unit.trim()) deny(400,'METRIC_NOT_CONFIGURED','This key result has no quantitative metric configured');
       if(kr.version!==input.expectedVersion) deny(409,'VERSION_CONFLICT','Key result changed; reload before recording');
       await tx.query('INSERT INTO measurements(id,kr_id,actual,source,note,recorded_by) VALUES($1,$2,$3,$4,$5,$6)',[randomUUID(),id,input.actual,input.source,input.note,user.id]);
       const updated=(await tx.query('UPDATE key_results SET actual=$2,version=version+1 WHERE id=$1 RETURNING *',[id,input.actual])).rows[0];

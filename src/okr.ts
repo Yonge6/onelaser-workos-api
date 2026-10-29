@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Database, Queryable } from './db.js';
 import type { User } from './auth.js';
 import { deny } from './errors.js';
+import { readOkrLegacySource } from './okr-import.js';
 
 const weight=z.number().finite().positive().max(100);
 const date=z.string().date();
@@ -29,9 +30,14 @@ async function view(tx:Queryable,kr:any){
   const history=(await tx.query('SELECT * FROM kr_appraisals WHERE kr_id=$1 ORDER BY metric_version,created_at,id',[kr.id])).rows;
   const self=[...history].reverse().find(row=>row.kind==='self')||null;
   const manager=self?[...history].reverse().find(row=>row.kind==='manager'&&row.self_appraisal_id===self.id&&row.metric_version===kr.version):null;
-  return {krId:kr.id,version:kr.version,self,manager:manager||null,history,policy:'human_confirmed_v1',legacyFormulaVerified:false};
+  return {krId:kr.id,version:kr.version,self,manager:manager||null,history,policy:'human_confirmed_v1',legacyFormulaVerified:false,legacySource:await readOkrLegacySource(tx,'key_result',kr.id)};
 }
 export async function registerOkrRoutes(app:FastifyInstance,db:Database){
+  app.get<{Params:{id:string}}>('/objectives/:id/source',async req=>{
+    const user=req.actor!,objective=(await db.query('SELECT * FROM objectives WHERE id=$1',[id.parse(req.params.id)])).rows[0];
+    if(!objective||objective.org_id!==user.org_id||objective.department_id!==user.department_id||(user.role!=='manager'&&objective.owner_id!==user.id))deny(404,'NOT_FOUND','Key result not found');
+    return readOkrLegacySource(db,'objective',objective.id);
+  });
   app.get<{Params:{id:string}}>('/key-results/:id/appraisal',async req=>{
     const user=req.actor!; return db.transaction(async tx=>view(tx,await accessible(tx,user,id.parse(req.params.id))));
   });

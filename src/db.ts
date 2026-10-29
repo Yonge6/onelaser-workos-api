@@ -1,4 +1,5 @@
 import { supportSchema } from './support.js';
+import { okrImportSchema } from './okr-import.js';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
@@ -76,6 +77,11 @@ CREATE TABLE IF NOT EXISTS key_results (
 );
 ALTER TABLE objectives ADD COLUMN IF NOT EXISTS planning jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE key_results ADD COLUMN IF NOT EXISTS planning jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE key_results ALTER COLUMN baseline DROP NOT NULL;
+ALTER TABLE key_results ALTER COLUMN target DROP NOT NULL;
+ALTER TABLE key_results ALTER COLUMN actual DROP NOT NULL;
+ALTER TABLE key_results ALTER COLUMN direction DROP NOT NULL;
+ALTER TABLE key_results ALTER COLUMN unit DROP NOT NULL;
 CREATE TABLE IF NOT EXISTS kr_appraisals (
  id text PRIMARY KEY, kr_id text NOT NULL REFERENCES key_results(id),
  kind text NOT NULL CHECK(kind IN ('self','manager')), score integer NOT NULL CHECK(score IN (0,20,40,60,80,100)),
@@ -182,7 +188,7 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 CREATE INDEX IF NOT EXISTS task_scope_idx ON tasks(org_id, department_id, owner_id);
 CREATE INDEX IF NOT EXISTS audit_scope_idx ON audit_events(org_id, department_id, owner_id);
 `;
-export const schema = coreSchema + supportSchema;
+export const schema = coreSchema + supportSchema + okrImportSchema;
 
 export async function seedDemo(db: Database) {
   const users = [

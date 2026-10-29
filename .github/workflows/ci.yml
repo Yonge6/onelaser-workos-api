@@ -33,6 +33,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Test DingTalk export parser with fictional records
+        run: python3 -m unittest discover -s test -p 'prepare_okr_xlsx_test.py'
       - name: Test pinned Wiki input safety patch
         run: node --test test/wiki-safety.test.mjs
       - name: Test with embedded PostgreSQL
@@ -44,6 +46,8 @@ jobs:
       - run: npm run build
       - name: Build production image with pinned frontend
         run: docker build -t workos-ci .
+      - name: Verify private import CLI is included in the production image
+        run: docker run --rm --entrypoint node workos-ci build/src/cli/import-okr.js --help
       - name: Test canonical redirect with production Caddy
         run: |
           set -euo pipefail

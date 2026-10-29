@@ -80,7 +80,7 @@ assert.equal((await fetch(origin + '/api/integrations/grok-bot/mcp', {
   method:'POST', headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
   body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{}})
 })).status, 503);
-for (const path of ['/.env', '/src/server.ts', '/deploy/Caddyfile', '/wiki/.env', '/wiki/api/tasks', '/wiki/src/server.ts']) {
+for (const path of ['/.env', '/src/server.ts', '/deploy/Caddyfile', '/build/src/cli/import-okr.js', '/wiki/.env', '/wiki/api/tasks', '/wiki/src/server.ts']) {
   assert.equal((await fetch(origin + path)).status, 404);
 }
 console.log('Same-origin container smoke passed: pinned live frontend, PostgreSQL API, CSP, and fail-closed authentication. No provider requests sent.');
