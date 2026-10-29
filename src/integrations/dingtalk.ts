@@ -1,7 +1,7 @@
 /** Fixed DingTalk vendor endpoints; no user-supplied upstream URLs. */
 export type DingTalkConfig = {
   clientId: string; clientSecret: string; corpId: string; agentId?: string;
-  allowedDepartmentIds: string[]; managerUserIds: string[]; redirectUri: string;
+  allowedDepartmentIds: string[]; additionalUserIds?: string[]; managerUserIds: string[]; redirectUri: string;
 };
 export type DingTalkProfile = {
   externalUserId: string; unionId: string; name: string; departmentId: string;
@@ -17,12 +17,14 @@ export class DingTalkClient {
   private token?: { value: string; expires: number };
   private pendingToken?: Promise<string>;
   private readonly allowed: Set<string>;
+  private readonly additional: Set<string>;
   private readonly managers: Set<string>;
   constructor(private readonly config: DingTalkConfig, private readonly fetcher: typeof fetch = fetch) {
     const redirect = new URL(config.redirectUri);
     if (!config.clientId || !config.clientSecret || !config.corpId || redirect.protocol !== 'https:' || redirect.username || redirect.password || !config.allowedDepartmentIds.length || config.allowedDepartmentIds.some(x => !numericId.test(x) || !Number.isSafeInteger(Number(x)) || Number(x) < 1)) throw new DingTalkError('DINGTALK_CONFIGURATION_INVALID', 503);
     if (config.agentId && !numericId.test(config.agentId)) throw new DingTalkError('DINGTALK_CONFIGURATION_INVALID', 503);
-    this.allowed = new Set(config.allowedDepartmentIds); this.managers = new Set(config.managerUserIds);
+    if (config.additionalUserIds?.some(id=>!userId.test(id))) throw new DingTalkError('DINGTALK_CONFIGURATION_INVALID', 503);
+    this.allowed = new Set(config.allowedDepartmentIds); this.additional = new Set(config.additionalUserIds||[]); this.managers = new Set(config.managerUserIds);
   }
   authorizationUrl(state: string) {
     if (!/^[A-Za-z0-9_-]{32,256}$/.test(state)) throw new DingTalkError('OAUTH_STATE_INVALID',400);
@@ -61,7 +63,9 @@ export class DingTalkClient {
     const response=await this.enterprise('/topapi/v2/user/get',{userid:externalUserId});
     const member=response.result;
     if (!member || member.active !== true || member.userid !== externalUserId || typeof member.unionid !== 'string' || !member.unionid || (expectedUnionId && member.unionid !== expectedUnionId)) throw new DingTalkError('DINGTALK_MEMBERSHIP_REJECTED',403);
-    const departmentId=this.config.allowedDepartmentIds.find(id=>Array.isArray(member.dept_id_list)&&member.dept_id_list.some((v:unknown)=>String(v)===id));
+    const departments:string[]=Array.isArray(member.dept_id_list)?member.dept_id_list.map(String).filter((id:string)=>numericId.test(id)&&Number.isSafeInteger(Number(id))&&Number(id)>0):[];
+    // An explicit person exception never grants access to the rest of their department.
+    const departmentId=this.config.allowedDepartmentIds.find(id=>departments.includes(id))||(this.additional.has(externalUserId)?departments[0]:undefined);
     if (!departmentId) throw new DingTalkError('DINGTALK_DEPARTMENT_FORBIDDEN',403);
     const department=await this.enterprise('/topapi/v2/department/get',{dept_id:Number(departmentId),language:'zh_CN'});
     if (typeof department.result?.name !== 'string' || String(department.result.dept_id)!==departmentId || typeof member.name !== 'string' || !member.name) throw new DingTalkError('DINGTALK_INVALID_RESPONSE',502);
@@ -93,6 +97,10 @@ export class DingTalkClient {
       if(!Number.isSafeInteger(result.next_cursor)||result.next_cursor<0)throw new DingTalkError('DINGTALK_PAGINATION_INVALID',502);cursor=result.next_cursor;
     }
     throw new DingTalkError('DINGTALK_DIRECTORY_LIMIT',502);
+  }
+  async getAdditionalUser(externalUserId:string):Promise<DingTalkProfile> {
+    if(!this.additional.has(externalUserId))throw new DingTalkError('DINGTALK_MEMBERSHIP_REJECTED',403);
+    return this.member(externalUserId);
   }
   async sendWorkNotification(userIds: string[], content: string): Promise<{taskId: string}> {
     if(!this.config.agentId)throw new DingTalkError('DINGTALK_NOTIFICATIONS_NOT_CONFIGURED',503);

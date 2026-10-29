@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { buildApp } from '../src/app.js';
 import { createDatabase, schema, type Database } from '../src/db.js';
-import type { DingTalkProfile } from '../src/integrations/dingtalk.js';
+import { DingTalkError, type DingTalkProfile } from '../src/integrations/dingtalk.js';
 import { integrationOptionsFromEnv } from '../src/integrations/routes.js';
 import type { ReviewInput } from '../src/integrations/grok.js';
 
@@ -116,4 +116,45 @@ test('company mode joins only approved enterprise departments while preserving t
     const mapping=(await db.query('SELECT external_department_id FROM external_identities WHERE corp_id=$1 AND user_id=$2',['corp-small',me.id])).rows[0];assert.equal(mapping.external_department_id,'456');
     const sync=await company.inject({method:'POST',url:'/integrations/dingtalk/sync',headers:{cookie:manager,origin,'x-csrf-token':managerCsrf},payload:{}});assert.equal(sync.statusCode,200,sync.body);assert.deepEqual(calls,['123','456']);
   }finally{await company.close();}
+});
+
+test('Company sync includes only exact additional members, preserves identities, and fails atomically',async()=>{
+  const extras:DingTalkProfile[]=['extra-1','extra-2','extra-3'].map((externalUserId,index)=>({...employeeProfile,externalUserId,unionId:'union-'+externalUserId,name:'Extra '+index,departmentId:index?'789':'456',departmentName:index?'Outside B':'Outside A'}));
+  const additionalUserIds=extras.map(p=>p.externalUserId),departments:string[]=[],individuals:string[]=[];
+  let failExtra=false;
+  const gateway={...ding,async authenticate(code:string){return code==='manager'?managerProfile:extras.find(p=>p.externalUserId===code)||{...extras[0],externalUserId:'unapproved-colleague'};},async listDepartmentUsers(id:string){departments.push(id);return [managerProfile];},async getAdditionalUser(id:string){individuals.push(id);if(failExtra&&id==='extra-2')throw new DingTalkError('DINGTALK_MEMBERSHIP_REJECTED',403);return extras.find(p=>p.externalUserId===id)!;}};
+  const company=await buildApp({db,environment:'production',closeDatabase:false,integrations:{dingtalk:gateway,corpId:'corp-exact-additional',appPublicUrl:origin,teamMode:'company',allowedDepartmentIds:['123'],additionalUserIds}});
+  const logIn=async(code:string)=>{const start=await company.inject('/auth/dingtalk/start'),state=new URL(start.headers.location!).searchParams.get('state')!,nonce=String(start.headers['set-cookie']).split(';')[0];return company.inject({url:`/auth/dingtalk/callback?state=${state}&authCode=${code}`,headers:{cookie:nonce}});};
+  const cookieOf=(result:any)=>[result.headers['set-cookie']].flat().map(String).find(v=>v.startsWith('__Host-workos_session='))!.split(';')[0];
+  try{
+    assert.equal((await logIn('unapproved-colleague')).statusCode,403);
+    const manager=cookieOf(await logIn('manager')),extra=cookieOf(await logIn('extra-1'));
+    const managerCsrf=(await company.inject({url:'/auth/csrf',headers:{cookie:manager}})).json().csrfToken;
+    const extraCsrf=(await company.inject({url:'/auth/csrf',headers:{cookie:extra}})).json().csrfToken;
+    const sync=()=>company.inject({method:'POST',url:'/integrations/dingtalk/sync',headers:{cookie:manager,origin,'x-csrf-token':managerCsrf},payload:{}});
+    assert.equal((await company.inject({method:'POST',url:'/integrations/dingtalk/sync',headers:{cookie:extra,origin,'x-csrf-token':extraCsrf},payload:{}})).statusCode,403);
+    const before=(await company.inject({url:'/me',headers:{cookie:extra}})).json();assert.equal(before.role,'employee');assert.equal(before.executiveAccess,false);
+    for(let run=0;run<2;run++){const result=await sync();assert.equal(result.statusCode,200,result.body);assert.equal(result.json().synchronized,4);}
+    assert.deepEqual(departments,['123','123']);assert.deepEqual(individuals,[...additionalUserIds,...additionalUserIds]);
+    const rows=(await db.query('SELECT u.id,u.role,u.active,e.external_user_id,e.union_id,e.external_department_id FROM users u JOIN external_identities e ON e.user_id=u.id WHERE e.corp_id=$1 ORDER BY e.external_user_id',['corp-exact-additional'])).rows;
+    assert.equal(rows.length,4);assert.equal(rows.find(p=>p.external_user_id==='extra-1')!.id,before.id);
+    for(const source of extras){const saved=rows.find(p=>p.external_user_id===source.externalUserId)!;assert.equal(saved.role,'employee');assert.equal(saved.active,true);assert.equal(saved.union_id,source.unionId);assert.equal(saved.external_department_id,source.departmentId);}
+    const audits=await db.query('SELECT id FROM audit_events WHERE org_id=$1',['corp-exact-additional']);
+    failExtra=true;assert.equal((await sync()).statusCode,403);failExtra=false;
+    assert.equal((await db.query('SELECT id FROM audit_events WHERE org_id=$1',['corp-exact-additional'])).rows.length,audits.rows.length);
+    assert.equal((await db.query('SELECT id FROM users WHERE org_id=$1 AND active=true',['corp-exact-additional'])).rows.length,4);
+    // Session permissions come from the current database role; executive access remains separate.
+    await db.query('UPDATE users SET role=$2 WHERE id=$1',[before.id,'manager']);
+    const refreshed=(await company.inject({url:'/me',headers:{cookie:extra}})).json();assert.equal(refreshed.role,'manager');assert.equal(refreshed.executiveAccess,false);
+    additionalUserIds.splice(0);assert.equal((await sync()).statusCode,200);
+    assert.equal((await company.inject({url:'/me',headers:{cookie:extra}})).statusCode,401);
+    assert.equal((await logIn('extra-1')).statusCode,403);
+  }finally{await company.close();}
+});
+
+test('Additional member environment configuration is company-only and does not imply manager access',()=>{
+  const base={NODE_ENV:'production',APP_PUBLIC_URL:origin,DINGTALK_CLIENT_ID:'fixture',DINGTALK_CLIENT_SECRET:'fixture',DINGTALK_CORP_ID:'corp',DINGTALK_ALLOWED_DEPARTMENT_IDS:'123',DINGTALK_MANAGER_USER_IDS:'manager',DINGTALK_ADDITIONAL_USER_IDS:'extra-1, extra-2,extra-1'};
+  assert.throws(()=>integrationOptionsFromEnv(base),DingTalkError);
+  const options=integrationOptionsFromEnv({...base,WORKOS_TEAM_MODE:'company'});
+  assert.deepEqual(options.additionalUserIds,['extra-1','extra-2']);assert.deepEqual(options.allowedDepartmentIds,['123']);assert.deepEqual(options.executiveUserIds,[]);
 });

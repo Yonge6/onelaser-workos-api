@@ -14,11 +14,11 @@ import { BotOAuthService, registerBotOAuthRoutes, validatedBotRedirects, type Bo
 
 export type IntegrationOptions = {
   executiveUserIds?: string[];
-  dingtalk?: Pick<DingTalkClient,'authorizationUrl'|'authenticate'|'listDepartmentUsers'|'sendWorkNotification'>;
+  dingtalk?: Pick<DingTalkClient,'authorizationUrl'|'authenticate'|'listDepartmentUsers'|'sendWorkNotification'> & Partial<Pick<DingTalkClient,'getAdditionalUser'>>;
   corpId?: string; appPublicUrl?: string; secureCookies?: boolean; ai?: Pick<GrokReviewer,'model'|'inputHash'|'assess'>;
   aiReviewMode?:'api'|'bot';bot?:GrokBotAdapter;
   botMcpAuthMode?:'bearer'|'oauth';botOAuth?:BotOAuthConfig;
-  notificationsEnabled?: boolean; frontendConnected?: boolean; teamMode?:'company'|'department';allowedDepartmentIds?:string[];teamName?:string; setup?: {dingtalkMissing:string[];aiMissing:string[];notificationMissing:string[]};
+  notificationsEnabled?: boolean; frontendConnected?: boolean; teamMode?:'company'|'department';allowedDepartmentIds?:string[];additionalUserIds?:string[];teamName?:string; setup?: {dingtalkMissing:string[];aiMissing:string[];notificationMissing:string[]};
 };
 const id=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
 const currentUser=(req:FastifyRequest):User=>req.actor||deny(401,'UNAUTHENTICATED','Authentication is required');
@@ -38,7 +38,7 @@ async function audit(db:Queryable,user:User,action:string,objectId:string,detail
   await db.query('INSERT INTO audit_events(id,org_id,department_id,owner_id,actor_id,action,object_id,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[randomUUID(),user.org_id,user.department_id,ownerId,user.id,action,objectId,JSON.stringify(details)]);
 }
 async function upsertMember(tx:Queryable,corpId:string,profile:DingTalkProfile,options:IntegrationOptions){
-  if(options.teamMode==='company'&&!options.allowedDepartmentIds?.includes(profile.departmentId))deny(403,'DINGTALK_DEPARTMENT_FORBIDDEN','DingTalk could not complete the request');
+  if(options.teamMode==='company'&&!options.allowedDepartmentIds?.includes(profile.departmentId)&&!options.additionalUserIds?.includes(profile.externalUserId))deny(403,'DINGTALK_DEPARTMENT_FORBIDDEN','DingTalk could not complete the request');
   const departmentId=options.teamMode==='company'?'company':'ding_'+profile.departmentId;
   const departmentName=options.teamMode==='company'?(options.teamName||'OneLaser'):profile.departmentName;
   await tx.query('INSERT INTO departments(org_id,id,external_id,name) VALUES($1,$2,$3,$4) ON CONFLICT(org_id,id) DO UPDATE SET name=excluded.name',[corpId,departmentId,options.teamMode==='company'?'company':profile.departmentId,departmentName]);
@@ -53,6 +53,8 @@ async function upsertMember(tx:Queryable,corpId:string,profile:DingTalkProfile,o
   return (await tx.query<User>('SELECT * FROM users WHERE id=$1',[userId])).rows[0];
 }
 export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOptions {
+  const additionalUserIds=[...new Set((env.DINGTALK_ADDITIONAL_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean))];
+  if(additionalUserIds.length&&env.WORKOS_TEAM_MODE!=='company')throw new DingTalkError('DINGTALK_CONFIGURATION_INVALID',503);
   const publicUrl=env.APP_PUBLIC_URL||env.RENDER_EXTERNAL_URL;
   if(publicUrl){const url=new URL(publicUrl);if(url.username||url.password||url.search||url.hash||url.pathname!=='/'||(url.protocol!=='https:'&&!(env.NODE_ENV!=='production'&&url.protocol==='http:'&&['localhost','127.0.0.1'].includes(url.hostname))))throw new Error('APP_PUBLIC_URL must be an application origin');}
   const required=['DINGTALK_CLIENT_ID','DINGTALK_CLIENT_SECRET','DINGTALK_CORP_ID','DINGTALK_ALLOWED_DEPARTMENT_IDS','DINGTALK_MANAGER_USER_IDS'];
@@ -60,7 +62,7 @@ export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOpti
   let dingtalk:DingTalkClient|undefined;
   if(!dingtalkMissing.length){
     dingtalk=new DingTalkClient({clientId:env.DINGTALK_CLIENT_ID!,clientSecret:env.DINGTALK_CLIENT_SECRET!,corpId:env.DINGTALK_CORP_ID!,agentId:env.DINGTALK_AGENT_ID,
-      allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),managerUserIds:(env.DINGTALK_MANAGER_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),redirectUri:env.DINGTALK_REDIRECT_URI||new URL('/api/auth/dingtalk/callback',publicUrl!).toString()});
+      allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),additionalUserIds,managerUserIds:(env.DINGTALK_MANAGER_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),redirectUri:env.DINGTALK_REDIRECT_URI||new URL('/api/auth/dingtalk/callback',publicUrl!).toString()});
   }
   if(env.AI_REVIEW_MODE&&!['api','bot'].includes(env.AI_REVIEW_MODE))throw new Error('Invalid AI review mode');
   const aiReviewMode=env.AI_REVIEW_MODE==='bot'?'bot':'api';
@@ -76,7 +78,7 @@ export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOpti
   if(botMcpAuthMode==='oauth'){if(!redirectUris.length)botMissing.push('GROK_BOT_OAUTH_REDIRECT_URIS');if(!publicUrl)botMissing.push('APP_PUBLIC_URL');}
   if(aiReviewMode==='bot'&&!transportMissing.length&&botOrgId?.trim())bot=new GrokBotAdapter({webhookUrl:env.GROK_BOT_WEBHOOK_URL!,webhookSecret:env.GROK_BOT_WEBHOOK_SECRET!,allowedHost:env.GROK_BOT_WEBHOOK_ALLOWED_HOST!,workerToken:botMcpAuthMode==='bearer'?env.GROK_BOT_WORKER_TOKEN:undefined,orgId:botOrgId});
   if(aiReviewMode==='api'&&key&&env.AI_MODEL_ID){ai=new GrokReviewer({apiKey:key,model:env.AI_MODEL_ID,baseUrl:env.AI_PROVIDER_BASE_URL,timeoutMs:Number(env.AI_REVIEW_TIMEOUT_MS)||45000});}
-  return {executiveUserIds:(env.WORKOS_EXECUTIVE_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,aiReviewMode,bot,botMcpAuthMode,botOAuth,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:aiReviewMode==='bot'?botMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
+  return {additionalUserIds,executiveUserIds:(env.WORKOS_EXECUTIVE_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,aiReviewMode,bot,botMcpAuthMode,botOAuth,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:aiReviewMode==='bot'?botMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
 }
 export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,options:IntegrationOptions){
   const secure=options.secureCookies===true,sessionName=sessionCookieName(secure),nonceName=oauthCookieName(secure);
@@ -139,6 +141,10 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
     if(!externalDepartments.length)deny(400,'DIRECTORY_SCOPE_INVALID','Department synchronization is unavailable');
     const allProfiles:DingTalkProfile[]=[];
     for(const externalDepartment of externalDepartments)allProfiles.push(...await safeUpstream(()=>options.dingtalk!.listDepartmentUsers(externalDepartment)));
+    if(options.teamMode==='company')for(const externalUserId of new Set(options.additionalUserIds||[])){
+      if(!options.dingtalk.getAdditionalUser)deny(503,'DINGTALK_CONFIGURATION_INVALID','DingTalk could not complete the request');
+      allProfiles.push(await safeUpstream(()=>options.dingtalk!.getAdditionalUser!(externalUserId)));
+    }
     const profiles=[...new Map(allProfiles.map(profile=>[profile.externalUserId,profile])).values()];
     // A small company can use one internal workspace after enterprise membership checks.
     const sameDepartment=options.teamMode==='company'?profiles:profiles.filter(p=>'ding_'+p.departmentId===user.department_id);

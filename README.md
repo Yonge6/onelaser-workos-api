@@ -179,6 +179,8 @@ curl --fail --silent --show-error http://127.0.0.1:3001/tasks \
 
 负责人可调用 `POST /integrations/dingtalk/sync` 同步批准范围，缺席成员会停用，从而立即失去已有会话权限。`GET /directory`、`GET /departments` 提供允许的人员与工作区；员工只可建本人个人目标，负责人可建当前工作区目标。
 
+公司模式如需接入其他部门的个别人，可配置 `DINGTALK_ADDITIONAL_USER_IDS` 为经核对的钉钉企业 userId（逗号分隔，不是姓名或员工工号），保留原部门白名单不变。登录仍核验同一企业、内部有效成员和真实部门；同步逐一读取这些指定成员，合并去重后再判断缺席成员，不枚举其所在的其他部门。任何成员核验失败会中止本次同步，避免部分结果停用已有成员。这个名单只授予接入资格，不授予管理权限；只有 `DINGTALK_MANAGER_USER_IDS` 决定负责人角色，`WORKOS_EXECUTIVE_USER_IDS` 独立决定老板看板权限。额外人员名单只支持 `WORKOS_TEAM_MODE=company`；配置更新后需部署并执行同步或重新登录，使数据库角色生效，已有会话的后续请求读取最新角色。
+
 `POST /objectives` 正文为 `{title,level:"personal"|"department",ownerId?}`；`POST /objectives/:id/key-results` 为 `{title,baseline,target,actual?,direction:"increase"|"decrease",unit}`。普通部门角色不能创建全企业公司级目标，避免扩大跨工作区权限。
 
 Grok 评审可选择模型 API（`AI_REVIEW_MODE=api`）或 [Bot 异步通道](docs/integrations/GROK_BOT_SETUP.md)（`AI_REVIEW_MODE=bot`）；Bot 使用独立 Work OS Routine，保留现有客服 Bot 工作流。评审只传递当前任务标准和当前提交的文本，不发送薪资/全员资料，不自动抓取 URL。服务端验证所有标准恰好出现一次、引用 ID 属于本次提交、引用原文实际存在。失败或旧版本返回待处理错误，不填低分；AI 不改变任务验收状态、不作人事判断。`GET /tasks/:id/evaluations` 保留版本历史，负责人仍需实际核对并验收。

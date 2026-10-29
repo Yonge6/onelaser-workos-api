@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DingTalkClient, DingTalkError, type DingTalkConfig } from '../src/integrations/dingtalk.js';
 const config:DingTalkConfig={clientId:'test-client',clientSecret:'test-placeholder-secret',corpId:'ding-corp-test',agentId:'123',allowedDepartmentIds:['42'],managerUserIds:['employee-1'],redirectUri:'https://work.example/auth/dingtalk/callback'};
 const response=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
-function fixture(options:{corpId?:string;external?:boolean;inactive?:boolean;department?:number;contactType?:unknown}={}){
+function fixture(options:{corpId?:string;external?:boolean;inactive?:boolean;department?:number;contactType?:unknown;memberResponse?:Record<string,unknown>}={},configOverride:Partial<DingTalkConfig>={}){
  const calls:{url:URL;body:any;headers:Headers}[]=[];
  const fetcher:typeof fetch=async(input,init)=>{
   const url=new URL(String(input)),body=init?.body?JSON.parse(String(init.body)):undefined,headers=new Headers(init?.headers);calls.push({url,body,headers});
@@ -11,13 +11,13 @@ function fixture(options:{corpId?:string;external?:boolean;inactive?:boolean;dep
   if(url.pathname==='/v1.0/contact/users/me')return response({unionId:'union-1',nick:'Not an authorization role'});
   if(url.pathname==='/v1.0/oauth2/accessToken')return response({accessToken:'enterprise-token',expireIn:7200});
   if(url.pathname==='/topapi/user/getbyunionid')return response({errcode:0,result:{contact_type:'contactType' in options?options.contactType:options.external?1:0,userid:'employee-1'}});
-  if(url.pathname==='/topapi/v2/user/get')return response({errcode:0,result:{userid:body.userid,unionid:body.userid==='employee-1'?'union-1':'union-2',active:!options.inactive,name:body.userid==='employee-1'?'Test Lead':'Test Employee',dept_id_list:[options.department||42]}});
-  if(url.pathname==='/topapi/v2/department/get')return response({errcode:0,result:{dept_id:42,name:'Pilot department'}});
+  if(url.pathname==='/topapi/v2/user/get')return response({errcode:0,result:{userid:body.userid,unionid:body.userid==='employee-1'?'union-1':'union-2',active:!options.inactive,name:body.userid==='employee-1'?'Test Lead':'Test Employee',dept_id_list:[options.department||42],...options.memberResponse}});
+  if(url.pathname==='/topapi/v2/department/get')return response({errcode:0,result:{dept_id:body.dept_id,name:'Pilot department'}});
   if(url.pathname==='/topapi/v2/user/list')return response({errcode:0,result:{list:[{userid:body.cursor===0?'employee-1':'employee-2'}],has_more:body.cursor===0,next_cursor:100}});
   if(url.pathname==='/topapi/message/corpconversation/asyncsend_v2')return response({errcode:0,task_id:456});
   throw new Error('Unexpected fixture path');
  };
- return {client:new DingTalkClient(config,fetcher),calls};
+ return {client:new DingTalkClient({...config,...configOverride},fetcher),calls};
 }
 test('DingTalk OAuth authorization URL contains state but no secret',()=>{
  const {client}=fixture();const url=new URL(client.authorizationUrl('a'.repeat(43)));
@@ -75,4 +75,24 @@ test('Upstream bodies and network errors never leak tokens or secrets',async()=>
 test('OAuth corp scope must return the configured corporation explicitly',async()=>{
  const client=new DingTalkClient(config,async()=>response({accessToken:'personal-token-with-no-corp'}));
  await assert.rejects(client.authenticate('code'),(error:unknown)=>error instanceof DingTalkError&&error.code==='DINGTALK_CORPORATION_FORBIDDEN');
+});
+
+test('Exact additional members can log in outside approved departments without broadening directory access or role',async()=>{
+ const {client,calls}=fixture({department:99},{additionalUserIds:['employee-1'],managerUserIds:[]});
+ const member=await client.authenticate('code');assert.equal(member.departmentId,'99');assert.equal(member.role,'employee');
+ assert.deepEqual(await client.getAdditionalUser('employee-1'),member);
+ const count=calls.length;
+ await assert.rejects(client.getAdditionalUser('employee-2'),(error:unknown)=>error instanceof DingTalkError&&error.status===403);
+ await assert.rejects(client.listDepartmentUsers('99'),(error:unknown)=>error instanceof DingTalkError&&error.status===403);
+ assert.equal(calls.length,count);assert(!calls.some(x=>x.url.pathname==='/topapi/v2/user/list'));
+ assert.equal((await fixture({department:99},{additionalUserIds:['employee-1'],managerUserIds:['employee-1']}).client.authenticate('code')).role,'manager');
+});
+test('Additional membership still requires matching corporation, internal contact, active identity and verified department',async()=>{
+ for(const options of [{corpId:'different-corp'},{external:true},{inactive:true},{memberResponse:{userid:'another-person'}},{memberResponse:{unionid:'another-union'}},{memberResponse:{dept_id_list:[]}},{memberResponse:{dept_id_list:['invalid',0,-1,'9007199254740992']}}]){
+  await assert.rejects(fixture({...options,department:99},{additionalUserIds:['employee-1'],managerUserIds:[]}).client.authenticate('code'),DingTalkError);
+ }
+ for(const memberResponse of [{active:false},{userid:'another-person'},{unionid:''}]){
+  await assert.rejects(fixture({memberResponse},{additionalUserIds:['employee-1']}).client.getAdditionalUser('employee-1'),DingTalkError);
+ }
+ assert.throws(()=>fixture({}, {additionalUserIds:['not a valid ID']}),DingTalkError);
 });
