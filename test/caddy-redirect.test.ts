@@ -47,11 +47,13 @@ test('canonical origin switches only the approved Render host and retains health
         edge.stderr.on('data', chunk => { diagnostics += chunk; });
         const exited = once(edge, 'exit');
         const get = (host: string, path: string, method = 'GET', headers: Record<string, string> = {}) =>
-          new Promise<{ status: number; location?: string; cacheControl?: string; body: string }>((resolve, reject) => {
+          new Promise<{ status: number; location?: string; cacheControl?: string; csp: string; frameOptions: string; body: string }>((resolve, reject) => {
             const req = request({ hostname: '127.0.0.1', port, path, method, headers: { host, ...headers } }, res => {
               let body = ''; res.setEncoding('utf8'); res.on('data', chunk => { body += chunk; });
               res.on('end', () => resolve({ status: res.statusCode!, location: res.headers.location,
-                cacheControl: res.headers['cache-control'], body }));
+                cacheControl: res.headers['cache-control'],
+                csp: String(res.headers['content-security-policy'] || ''),
+                frameOptions: String(res.headers['x-frame-options'] || ''), body }));
             });
             req.on('error', reject); req.end();
           });
@@ -63,6 +65,20 @@ test('canonical origin switches only the approved Render host and retains health
             await new Promise(resolve => setTimeout(resolve, 20));
           }
           assert.ok(ready, diagnostics);
+          const publicPage = await get('craftos.app', '/');
+          const csp = new Map(publicPage.csp.split(';').map(part => {
+            const [name, ...sources] = part.trim().split(/\s+/);
+            return [name, sources.join(' ')] as const;
+          }));
+          // Embed only the original public Wiki path. The parent employee app
+          // stays non-frameable and does not gain remote scripts or API access.
+          assert.equal(csp.get('frame-src'), 'https://yonge6.github.io/onelaser-support-center/');
+          assert.equal(csp.get('frame-ancestors'), "'none'");
+          assert.equal(publicPage.frameOptions, 'DENY');
+          for (const directive of ['default-src', 'script-src', 'connect-src']) {
+            assert.equal(csp.get(directive), "'self'");
+          }
+          assert.equal(csp.get('img-src'), "'self' data:");
           for (const path of ['/healthz', '/api/health']) {
             const response = await get(oldHost, path);
             assert.equal(response.status, 200); assert.equal(response.location, undefined);

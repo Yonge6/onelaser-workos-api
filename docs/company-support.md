@@ -2,6 +2,14 @@
 
 The authenticated Work OS frontend has native Support and Knowledge modules. The existing support pilot remains the only Zoho/Grok dispatcher; it is not yet migrated off the Mac. The outbound connector is read-only locally and writes bounded snapshots to PostgreSQL. It never exports credential files, raw mail snapshots, delivery payloads, approval keys or customer-send capabilities.
 
+## Knowledge center / Wiki
+
+The primary Knowledge center / Wiki view embeds the complete original public site at `https://yonge6.github.io/onelaser-support-center/`. Its homepage, product navigation, full-text search, downloads, article layout, images, original-source links, mobile navigation and language switch remain on that site and continue to receive its updates. An open-original-site action is available if the embedded view cannot load. This does not copy the public site's scripts or article HTML into the employee application's origin.
+
+The frame receives only the UI language (`lang=zh` or `lang=en`), with no Work OS session token, employee identity, review record or message bridge. It uses a cross-origin sandbox permitting scripts, same-origin access within the public site, forms, popups, unsandboxed popup destinations and downloads. Top-level navigation is not permitted. Caddy allows framing only the original site's exact path prefix; the Work OS parent retains `X-Frame-Options: DENY`, `frame-ancestors 'none'`, and its existing script/connect/image restrictions.
+
+The secondary Archive & review view retains the native article snapshots and authenticated review records. Public-site reading and private review are separate: the original public site cannot read or write employee review data. Existing review permissions, actor attribution, content hashes and freshness checks remain unchanged. Source content stays labelled as awaiting review; embedding it does not approve technical content or activate the SLA proposal.
+
 Configure private Render variables:
 - `WORKOS_SUPPORT_ORG_ID`: existing Work OS organization identifier.
 - `WORKOS_SUPPORT_INGEST_TOKEN`: a new random secret (32+ characters), scoped only to snapshot ingestion.
