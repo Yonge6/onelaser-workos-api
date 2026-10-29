@@ -1,3 +1,4 @@
+import { registerSupportRoutes, supportPermissions, type SupportOptions } from './support.js';
 import { registerOkrRoutes } from './okr.js';
 import { executiveSummary } from './executive.js';
 import Fastify, { type FastifyRequest } from 'fastify';
@@ -25,7 +26,7 @@ const taskInput = z.object({
 const submissionInput = z.object({ expectedVersion, title:z.string().trim().min(3).max(200), description:z.string().trim().min(10).max(30000), evidenceUrl:evidenceUrl.optional() }).strict();
 const reviewInput = z.object({ expectedVersion, submissionVersion:z.number().int().min(1), decision:z.enum(['accept','return']), quality:z.number().int().min(0).max(100).optional(), note:z.string().trim().min(5).max(4000), verifiedCurrentSubmission:z.boolean().optional() }).strict();
 const measurementInput = z.object({ expectedVersion, actual:z.number().finite(), source:z.string().trim().min(3).max(2000), note:z.string().trim().min(5).max(4000) }).strict();
-export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean; integrations?:IntegrationOptions };
+export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean; integrations?:IntegrationOptions; support?:SupportOptions };
 
 function actor(req: FastifyRequest): User { return req.actor || deny(401,'UNAUTHENTICATED','Authentication is required'); }
 function scope(user: User) { return user.role === 'manager' ? ['org_id=$1 AND department_id=$2',[user.org_id,user.department_id]] as const : ['org_id=$1 AND owner_id=$2',[user.org_id,user.id]] as const; }
@@ -60,7 +61,7 @@ export async function buildApp(options:AppOptions) {
   app.decorateRequest('cookieAuthenticated',false);
   const integrations={...options.integrations,secureCookies:environment==='production'||options.integrations?.secureCookies===true};
   // This exact endpoint has its own worker-only bearer authentication, never a user session.
-  const publicPaths=new Set(['/health','/capabilities','/auth/dev-login','/auth/dingtalk/start','/auth/dingtalk/callback','/integrations/grok-bot/mcp']);
+  const publicPaths=new Set(['/health','/capabilities','/auth/dev-login','/auth/dingtalk/start','/auth/dingtalk/callback','/integrations/grok-bot/mcp','/support/ingest']);
   for(const path of [...BOT_OAUTH_WELL_KNOWN,...['/register','/authorize','/token','/revoke','/consent.css'].map(path=>BOT_OAUTH_PREFIX+path)])publicPaths.add(path);
   app.addHook('onRequest',async(req,reply)=>{
     req.language=languageFrom(req.headers['accept-language']);
@@ -109,8 +110,9 @@ export async function buildApp(options:AppOptions) {
   });
   app.delete('/auth/session',async(req,reply)=>{await db.query('DELETE FROM sessions WHERE token_hash=$1',[hash(req.sessionToken!)]);reply.header('Set-Cookie',cookie(sessionCookieName(integrations.secureCookies),'',integrations.secureCookies,0));return {revoked:true};});
   const isExecutive=(user:User)=>integrations.executiveUserIds?.includes(user.id)===true;
-  app.get('/me',async req=>({...actor(req),executiveAccess:isExecutive(actor(req))}));
+  app.get('/me',async req=>({...actor(req),executiveAccess:isExecutive(actor(req)),supportAccess:supportPermissions(actor(req),options.support||{},integrations.executiveUserIds||[])}));
   app.get('/executive/summary',async req=>{const user=actor(req);if(!isExecutive(user))deny(403,'FORBIDDEN','Executive access is required');return db.transaction(tx=>executiveSummary(tx,user.org_id,integrations.teamMode));});
+  registerSupportRoutes(app,db,options.support,integrations.executiveUserIds);
   app.get('/tasks',async req=>{
     const user=actor(req),[where,params]=scope(user);
     return {items:(await db.query(`SELECT * FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};

@@ -1,3 +1,4 @@
+import { supportSchema } from './support.js';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
@@ -40,7 +41,7 @@ export async function createDatabase(options: { connectionString?: string; dataD
   };
 }
 
-export const schema = `
+const coreSchema = `
 CREATE TABLE IF NOT EXISTS users (
  id text PRIMARY KEY, org_id text NOT NULL, department_id text NOT NULL,
  display_name text NOT NULL, role text NOT NULL CHECK (role IN ('employee','manager')), active boolean NOT NULL DEFAULT true
@@ -181,6 +182,8 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 CREATE INDEX IF NOT EXISTS task_scope_idx ON tasks(org_id, department_id, owner_id);
 CREATE INDEX IF NOT EXISTS audit_scope_idx ON audit_events(org_id, department_id, owner_id);
 `;
+export const schema = coreSchema + supportSchema;
+
 export async function seedDemo(db: Database) {
   const users = [
     ['m1','marketing','林楠','manager'], ['m2','marketing','陈一','employee'], ['m3','marketing','许夏','employee'],
