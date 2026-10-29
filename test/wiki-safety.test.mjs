@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { hardenWikiApp } from '../tools/wiki-safety.mjs';
+import { hardenWikiApp, hardenWikiLocale } from '../tools/wiki-safety.mjs';
 
 // Self-contained renderer fixture. The vulnerable catalog declaration is the
 // exact line from public support-center d82691e, with its hash/query routing and
@@ -92,5 +92,65 @@ test('plain search remains unchanged and unknown/prototype family values select 
     const rendered = await render(hardenWikiApp(source), '#/search?' + new URLSearchParams({ family, q: 'laser' }));
     assert.deepEqual(rendered.request, { q: 'laser', family: '', topic: '' });
     assert.equal(rendered.heading, 'Find your next step.');
+  }
+});
+
+// Exact pinned path function: test URL behavior, not just replacement text.
+const localeSource = String.raw`(() => {
+  const path=value=>{
+    let result=value.startsWith('/')&&!value.startsWith('//')?base+value:value;
+    if(revision&&(result.startsWith(base+'/assets/')||result.startsWith(base+'/data/')))result+=(result.includes('?')?'&':'?')+'v='+revision;
+    return result;
+  };
+  window.path=path;
+  window.sourceBody='Technical text remains in its English original.';
+})();`;
+
+function localePaths(code, language, revision = 'cdda6b1f3e28', base = '/wiki') {
+  const context = { base, language, revision, window: {} };
+  vm.runInNewContext(code, context, { timeout: 1000 });
+  return context.window;
+}
+
+test('locale patch is one exact guarded line and leaves technical text intact', () => {
+  const hardened = hardenWikiLocale(localeSource);
+  const before = localeSource.split('\n'), after = hardened.split('\n');
+  const changed = before.flatMap((line, index) => line === after[index] ? [] : [index]);
+  assert.equal(before.length, after.length); assert.equal(changed.length, 1);
+  const originalLine = before[changed[0]];
+  assert.throws(() => hardenWikiLocale(localeSource.replace(originalLine, originalLine.trim())), /exactly once/);
+  assert.throws(() => hardenWikiLocale(localeSource + '\n' + originalLine), /exactly once/);
+  assert.throws(() => hardenWikiLocale(hardened), /exactly once/);
+  assert.throws(() => hardenWikiLocale(''), /exactly once/);
+  assert.throws(() => hardenWikiLocale(undefined), TypeError);
+  for (const language of ['zh', 'en']) {
+    assert.equal(localePaths(hardened, language).sourceBody, localePaths(localeSource, language).sourceBody);
+  }
+});
+
+test('home, search, family, downloads and article links preserve language and only change the current document hash', () => {
+  for (const language of ['zh', 'en']) {
+    const { path } = localePaths(hardenWikiLocale(localeSource), language);
+    const current = new URL(`https://craftos.app/wiki/?lang=${language}#/`);
+    for (const route of ['/', '/#/', '/#/search?q=air+assist&topic=guides', '/#/family/x-series?q=firmware',
+      '/#/downloads', '/#/article/en-36', '/#/article/en-36#install']) {
+      const target = new URL(path(route), current);
+      assert.equal(target.origin + target.pathname + target.search, current.origin + current.pathname + current.search);
+      assert.equal(target.hash, route === '/' ? '#/' : route.slice(1));
+      assert.equal(target.searchParams.get('lang'), language);
+    }
+  }
+});
+
+test('locale patch leaves revisioned asset/data paths and absolute external URLs unchanged', () => {
+  for (const language of ['zh', 'en']) for (const revision of ['', 'cdda6b1f3e28']) {
+    const before = localePaths(localeSource, language, revision).path;
+    const after = localePaths(hardenWikiLocale(localeSource), language, revision).path;
+    for (const value of ['/assets/app.js', '/assets/styles.css?other=1', '/data/library.json',
+      '/data/articles/en-36.json', '/api/library', '/docs/sla-draft.md', '/assets/fonts/Certia-Regular.otf',
+      'https://wiki.1laser.com/guide#install', 'https://youtube.com/watch?v=example', '//example.com/image.png', '#section', './image.png']) {
+      assert.equal(after(value), before(value), value);
+    }
+    assert.equal(after('/data/library.json'), '/wiki/data/library.json' + (revision ? '?v=' + revision : ''));
   }
 });

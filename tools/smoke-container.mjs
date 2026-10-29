@@ -42,9 +42,11 @@ const wikiBuild = await (await fetch(origin + '/wiki/wiki-build-info.json')).jso
 const wikiPin = (await readFile(new URL('../deploy/wiki-revision.txt', import.meta.url), 'utf8')).trim();
 assert.equal(wikiBuild.sourceCommit, wikiPin); assert.equal(wikiBuild.files, 259);
 assert.equal(wikiBuild.articles, 236); assert.equal(wikiBuild.privateOperationsIncluded, false);
-assert.equal(wikiBuild.patches.length, 1);
+assert.equal(wikiBuild.patches.length, 2);
 assert.equal(wikiBuild.patches[0].id, 'catalog-family-id-allowlist-v1');
 assert.notEqual(wikiBuild.patches[0].sourceSha256, wikiBuild.patches[0].packagedSha256);
+assert.equal(wikiBuild.patches[1].id, 'hash-route-language-preservation-v1');
+assert.notEqual(wikiBuild.patches[1].sourceSha256, wikiBuild.patches[1].packagedSha256);
 const wikiLibrary = await (await fetch(origin + '/wiki/data/library.json')).json();
 assert.equal(wikiLibrary.articles.length, 236); assert.equal(wikiLibrary.publication_enabled, false);
 assert.equal((await (await fetch(origin + '/wiki/data/search-index.json')).json()).length, 236);

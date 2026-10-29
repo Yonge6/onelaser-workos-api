@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hardenWikiApp } from './wiki-safety.mjs';
+import { hardenWikiApp, hardenWikiLocale } from './wiki-safety.mjs';
 
 const repository = 'Yonge6/onelaser-support-center';
 const fixedFiles = new Set([
@@ -112,6 +112,9 @@ export async function packageWiki(destination, revision) {
   const originalApp = buffers.get('assets/app.js');
   const hardenedApp = Buffer.from(hardenWikiApp(originalApp.toString('utf8')));
   buffers.set('assets/app.js', hardenedApp);
+  const originalLocale = buffers.get('assets/locale.js');
+  const hardenedLocale = Buffer.from(hardenWikiLocale(originalLocale.toString('utf8')));
+  buffers.set('assets/locale.js', hardenedLocale);
   for (const file of files) {
     const target = path.join(destination, file.path);
     await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, buffers.get(file.path));
@@ -121,7 +124,10 @@ export async function packageWiki(destination, revision) {
     articles: 236, privateOperationsIncluded: false,
     patches: [{ id: 'catalog-family-id-allowlist-v1', file: 'assets/app.js',
       sourceSha256: createHash('sha256').update(originalApp).digest('hex'),
-      packagedSha256: createHash('sha256').update(hardenedApp).digest('hex') }],
+      packagedSha256: createHash('sha256').update(hardenedApp).digest('hex') },
+    { id: 'hash-route-language-preservation-v1', file: 'assets/locale.js',
+      sourceSha256: createHash('sha256').update(originalLocale).digest('hex'),
+      packagedSha256: createHash('sha256').update(hardenedLocale).digest('hex') }],
   }) + '\n');
   console.log(`Verified and packaged ${files.length} public Wiki assets at ${revision}.`);
 }
