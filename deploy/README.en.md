@@ -41,6 +41,14 @@ An enterprise administrator must grant the independent app its login identity, e
 
 See the [Bot integration guide](../docs/integrations/GROK_BOT_SETUP.en.md). Deploy the base service and DingTalk login, configure administrator-verified callbacks and any required pinned client ID, then connect OAuth MCP. A manager explicitly approves and clicks Return to Bot. OAuth can connect before webhook settings are complete; actual assessments still require the dedicated Routine URL, secret and hostname. An empty callback allowlist disables OAuth, without static-secret or anonymous fallback. The template requires no model API credits. Webhook acceptance only starts execution; completion returns separately. Bot usage has plan limits, and account-wide shared computer/logins mean a separate workflow does not replace server authorization.
 
+### Cut over to craftos.app
+
+Verify `craftos.app` DNS, Render domain verification and HTTPS before setting `APP_PUBLIC_URL=https://craftos.app`. Update the DingTalk homepage and login callback together, including `DINGTALK_REDIRECT_URI` if it is explicitly set. Only this exact origin (optionally ending in `/`) enables a 307 redirect from `onelaser-workos.onrender.com`, preserving the path, query and method with `no-store`. `/healthz` and `/api/health` continue to answer health probes directly. All URLs retain their previous behavior before cutover; restoring the old `APP_PUBLIC_URL` disables the redirect.
+
+Employees must sign in at the new domain; existing sessions and in-progress logins do not migrate. Update the private connector origin and reauthorize the dedicated Bot at its new MCP URL. Redirects do not replace OAuth consent or API client migration. The destination is the literal `https://craftos.app`, never an incoming Host or an arbitrary environment URL.
+
+Run the routing, health and Host/origin-injection integration checks against a real Caddy 2 binary: `CADDY_BIN=/absolute/path/to/caddy node --import tsx --test test/caddy-redirect.test.ts`. Local runs explicitly skip when `CADDY_BIN` is absent. After building the production image, CI extracts its Caddy binary and sets `CADDY_BIN` to require these checks before the existing same-origin smoke test. The temporary extraction container is removed on success or failure.
+
 ## Existing server alternative
 
 `compose.yaml` includes a persistent PostgreSQL volume and the application. It exposes only `127.0.0.1:8088`; an existing HTTPS reverse proxy must forward the production origin to this port.

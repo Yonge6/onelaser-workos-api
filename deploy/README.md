@@ -41,6 +41,14 @@
 
 Bot 触发和回写的具体步骤见 [Bot 接入说明](../docs/integrations/GROK_BOT_SETUP.md)。先部署基础服务与钉钉登录，配置管理员核对的精确回调/可选 client ID，再连接 OAuth MCP，由主管明确批准并点击“返回 Bot”。OAuth 连接可先于 webhook 配置完成；实际评审仍须独立 Routine 的 webhook 地址、密钥及主机名。回调白名单为空时 OAuth 关闭，不能用静态 worker secret 替代或降级匿名。模板不要求购买模型 API 额度。Webhook 接受请求只表示开始执行，结果另行回传。Bot 套餐仍有用量限制。同账号 Bots 共享云端电脑和登录，独立工作流不能代替服务端权限控制。
 
+### 切换到 craftos.app
+
+先核验 `craftos.app` 的 DNS、Render 域名验证和 HTTPS，再将 `APP_PUBLIC_URL` 设为 `https://craftos.app`。同时更新钉钉首页与登录回调；如配置了 `DINGTALK_REDIRECT_URI`，必须一起更新。只有这个明确的正式来源（允许末尾 `/`）会启用旧 `onelaser-workos.onrender.com` 的 307 跳转，保留路径、查询参数和请求方法，并设置 `no-store`；`/healthz`、`/api/health` 始终直接服务健康检查。切换前所有 URL 保持原行为，恢复旧 `APP_PUBLIC_URL` 即关闭跳转。
+
+员工须从新域名重新登录；旧域名的会话与进行中的登录不会迁移。同步调整私有连接器的来源，并让专用 Bot 使用新 MCP 地址重新授权；跳转不替代 OAuth 授权或 API 客户端迁移。此规则的目标是固定的 `https://craftos.app`，不使用请求 Host 或任意环境变量拼接目标域名。
+
+可使用真实 Caddy 2 二进制验证切换前后路由、健康检查和 Host/来源注入防护：`CADDY_BIN=/absolute/path/to/caddy node --import tsx --test test/caddy-redirect.test.ts`。本地没有 `CADDY_BIN` 时该集成测试会明确跳过；CI 在构建生产镜像后提取其中的 Caddy 并设置 `CADDY_BIN`，必须执行这些测试，再运行原有同源 smoke test。用于提取二进制的临时容器在成功或失败后都会清理。
+
 ## 自有服务器备选
 
 `deploy/compose.yaml` 包含 PostgreSQL 持久卷和应用，只向本机暴露 `127.0.0.1:8088`。已有 Nginx/Caddy 将正式 HTTPS 来源反代至该端口。GitHub 链接不能替代这台运行服务的主机。

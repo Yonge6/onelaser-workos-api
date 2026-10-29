@@ -13,6 +13,14 @@ http://:{$PORT:10000} {
         Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://login.dingtalk.com"
         Cache-Control no-store
     }
+    # Enable only after the approved origin is switched. Keep the destination
+    # literal: neither an incoming Host nor arbitrary environment text is a URL.
+    @old_render_origin {
+        host onelaser-workos.onrender.com
+        expression `{env.APP_PUBLIC_URL} == 'https://craftos.app' || {env.APP_PUBLIC_URL} == 'https://craftos.app/'`
+        not path /healthz /api/health
+    }
+    redir @old_render_origin https://craftos.app{uri} 307
     handle /healthz {
         rewrite * /health
         reverse_proxy 127.0.0.1:3001

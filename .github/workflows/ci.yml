@@ -42,6 +42,15 @@ jobs:
       - run: npm run build
       - name: Build production image with pinned frontend
         run: docker build -t workos-ci .
+      - name: Test canonical redirect with production Caddy
+        run: |
+          set -euo pipefail
+          caddy_container="$(docker create workos-ci)"
+          trap 'docker rm -f "$caddy_container" >/dev/null 2>&1 || true' EXIT
+          mkdir -p "$RUNNER_TEMP/workos-caddy"
+          docker cp "$caddy_container:/usr/bin/caddy" "$RUNNER_TEMP/workos-caddy/caddy"
+          chmod +x "$RUNNER_TEMP/workos-caddy/caddy"
+          CADDY_BIN="$RUNNER_TEMP/workos-caddy/caddy" node --import tsx --test test/caddy-redirect.test.ts
       - name: Check same-origin production container
         run: |
           docker run --detach --name workos-smoke --network host --cap-drop=ALL \
