@@ -111,7 +111,7 @@ export function renderConsentPage(input: ConsentPageInput): string {
   }
   return `<!doctype html>
 <html lang="${en ? 'en' : 'zh-CN'}" data-theme="${theme}">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="same-origin">
 <title>${text.pageTitle} · OneLaser Work OS</title><link rel="stylesheet" href="/fonts.css"><link rel="stylesheet" href="${stylesheet}"></head>
 <body><a class="skip-link" href="#consent-main">${text.skip}</a>
 <div class="page-shell"><header class="page-header"><a class="brand" href="/">OneLaser <span>Work OS</span></a>

@@ -234,6 +234,9 @@ export async function registerBotOAuthRoutes(app:FastifyInstance,db:Database,ser
   }));
   const pageInput=(req:FastifyRequest)=>{const input=(req.method==='POST'?req.body:req.query)||{};const value=z.object({lang:z.enum(['zh','en']).optional(),theme:z.enum(['light','dark']).optional()}).passthrough().safeParse(input);return {language:value.success?(value.data.lang||req.language):req.language,theme:value.success?(value.data.theme||'light' as const):'light' as const};};
   app.get<{Params:{requestId:string}}>(BOT_OAUTH_PREFIX+'/requests/:requestId',boundary(async(req,reply)=>{
+    // no-referrer makes browser form POSTs send Origin: null. Preserve same-origin
+    // CSRF validation while still withholding referrers from external callbacks.
+    reply.header('Referrer-Policy','same-origin');
     const s=ready(),requestId=(req.params as any).requestId,pending=await s.pending(requestId,readCookie(req.headers.cookie,s.cookieName));
     const manager=await s.manager(req),client=(await db.query('SELECT name FROM bot_oauth_clients WHERE id=$1',[pending.client_id])).rows[0];
     return reply.type('text/html; charset=utf-8').send(renderConsentPage({requestId,path:'/api'+BOT_OAUTH_PREFIX+'/requests/'+requestId,...pageInput(req),status:manager?'consent':'login',clientName:client.name,redirectUri:pending.redirect_uri,organization:s.config.orgId!,managerName:manager?.user.display_name,csrfToken:manager?.csrf,loginUrl:'/api/auth/dingtalk/start?oauth_request='+requestId}));

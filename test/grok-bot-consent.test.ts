@@ -15,6 +15,7 @@ test('consent is a complete script-free document with only the same-origin exter
   const html = render();
   assert.match(html, /^<!doctype html>/); assert.match(html, /<html lang="en" data-theme="light">/);
   assert.match(html, /OneLaser <span>Work OS<\/span>/);
+  assert.match(html, /<meta name="referrer" content="same-origin">/);
   assert.match(html, /<link rel="stylesheet" href="\/api\/integrations\/grok-bot\/oauth\/consent\.css">/);
   assert(!/<script\b|<style\b|\sstyle\s*=|\son[a-z]+\s*=/i.test(html));
   assert(!/<meta[^>]+http-equiv\s*=|autofocus|javascript:/i.test(html));

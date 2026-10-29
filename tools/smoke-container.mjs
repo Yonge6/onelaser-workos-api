@@ -16,6 +16,9 @@ assert.equal(index.status, 200);
 assert.match(index.headers.get('content-security-policy'), /script-src 'self'/);
 assert.equal(index.headers.get('cache-control'), 'no-store');
 assert.equal(index.headers.get('x-frame-options'), 'DENY');
+assert.equal(index.headers.get('referrer-policy'), 'no-referrer');
+const consentPage = await fetch(origin + '/api/integrations/grok-bot/oauth/requests/' + 'R'.repeat(43));
+assert.equal(consentPage.headers.get('referrer-policy'), 'same-origin', 'Proxy must preserve the consent form origin policy, including error responses');
 const html = await index.text();
 for (const asset of ['preferences.js', 'runtime-config.js', 'api-client.js', 'live-app.js']) {
   assert.ok(html.includes(asset), 'Missing production client asset: ' + asset);
