@@ -52,7 +52,14 @@ def run(config_path,once=False,dry_run=False):
         try:
             info=subprocess.run(['/usr/sbin/diskutil','info','/Volumes/DevSSD'],capture_output=True,text=True,check=True).stdout
             if UUID not in info:raise ValueError('devssd_unavailable')
-            data=snapshot(cfg['projectRoot']);raw=json.dumps(data,ensure_ascii=False).encode()
+            data=snapshot(cfg['projectRoot'])
+            if not dry_run:
+                try:
+                    from sent_replies import collect
+                    data['sentReplies'],data['replySync']=collect(cfg['projectRoot'],{t['id'] for t in data['tickets']})
+                except Exception:
+                    data['sentReplies']=[];data['replySync']={'status':'unavailable','observedAt':None}
+            raw=json.dumps(data,ensure_ascii=False).encode()
             if len(raw)>8*1024*1024:raise ValueError('snapshot_too_large')
             if not dry_run:
                 req=urllib.request.Request(cfg['origin']+'/api/support/ingest',data=raw,headers={'Authorization':'Bearer '+cfg['token'],'Content-Type':'application/json'},method='POST')

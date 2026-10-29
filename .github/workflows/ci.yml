@@ -37,6 +37,8 @@ jobs:
         run: python3 -m unittest discover -s test -p 'prepare_okr_xlsx_test.py'
       - name: Test pinned Wiki input safety patch
         run: node --test test/wiki-safety.test.mjs
+      - name: Test read-only sent reply sync
+        run: python3 -m unittest discover -s tools/support -p "*_test.py"
       - name: Test with embedded PostgreSQL
         run: npm test
       - name: Test PostgreSQL adapter
