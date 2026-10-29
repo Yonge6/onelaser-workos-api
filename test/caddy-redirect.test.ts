@@ -16,8 +16,10 @@ test('canonical origin switches only the approved Render host and retains health
   const root = await mkdtemp(resolve('.runtime/caddy-redirect-test-'));
   const wikiRoot = resolve(root, 'wiki');
   await mkdir(resolve(wikiRoot, 'assets'), { recursive: true });
+  await mkdir(resolve(wikiRoot, 'data'), { recursive: true });
   await writeFile(resolve(wikiRoot, 'index.html'), 'complete public wiki');
   await writeFile(resolve(wikiRoot, 'assets/app.js'), 'public wiki script');
+  await writeFile(resolve(wikiRoot, 'data/library.json'), '{"articles":[{"id":"public-article"}]}');
   const upstream = createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ path: req.url, method: req.method }));
@@ -75,14 +77,24 @@ test('canonical origin switches only the approved Render host and retains health
             const [name, ...sources] = part.trim().split(/\s+/);
             return [name, sources.join(' ')] as const;
           }));
-          // Only /wiki/* is frameable; all other same-origin routes reject it.
-          assert.equal(csp.get('frame-src'), "'self'");
+          // Native shell never embeds frames; the original Wiki stays available separately.
+          assert.equal(csp.get('frame-src'), "'none'");
           assert.equal(csp.get('frame-ancestors'), "'none'");
           assert.equal(publicPage.frameOptions, 'DENY');
-          for (const directive of ['default-src', 'script-src', 'connect-src']) {
+          for (const directive of ['default-src', 'script-src', 'connect-src', 'font-src', 'base-uri']) {
             assert.equal(csp.get(directive), "'self'");
           }
-          assert.equal(csp.get('img-src'), "'self' data:");
+          assert.equal(csp.get('style-src'), "'self' 'unsafe-inline'");
+          assert.equal(csp.get('object-src'), "'none'");
+          assert.equal(csp.get('form-action'), "'self' https://login.dingtalk.com");
+          assert.equal(csp.get('img-src'), "'self' data: https://wiki.1laser.com https://zohodesk.1laser.com https://www.1laser.com https://encrypted-tbn0.gstatic.com https://weacrylic.com https://images.openai.com https://api2.mubu.com https://document-image.mubu.com");
+          assert.equal((await get('craftos.app', '/index.html')).csp, publicPage.csp);
+          for (const path of ['/api/tasks', '/api/integrations/grok-bot/oauth/requests/example', '/.well-known/oauth-authorization-server', '/healthz']) {
+            const upstreamPolicy = (await get('craftos.app', path)).csp;
+            assert.match(upstreamPolicy, /(?:^|;)\s*img-src 'self' data:;/, path);
+            assert.match(upstreamPolicy, /(?:^|;)\s*frame-src 'self';/, path);
+            assert.doesNotMatch(upstreamPolicy, /https:\/\/wiki\.1laser\.com/, path);
+          }
           const wiki = await get('craftos.app', '/wiki/?lang=zh');
           assert.equal(wiki.status, 200); assert.equal(wiki.body, 'complete public wiki');
           assert.equal(wiki.frameOptions, 'SAMEORIGIN');
@@ -100,6 +112,8 @@ test('canonical origin switches only the approved Render host and retains health
           }
           assert.equal(wikiCsp.get('img-src'), "'self' https://wiki.1laser.com https://zohodesk.1laser.com https://www.1laser.com https://encrypted-tbn0.gstatic.com https://weacrylic.com https://images.openai.com https://api2.mubu.com https://document-image.mubu.com");
           assert.equal((await get('craftos.app', '/wiki/assets/app.js')).body, 'public wiki script');
+          const wikiData = await get('craftos.app', '/wiki/data/library.json');
+          assert.equal(wikiData.status, 200);assert.deepEqual(JSON.parse(wikiData.body), {articles:[{id:'public-article'}]});
           const wikiRedirect = await get('craftos.app', '/wiki?lang=en');
           assert.equal(wikiRedirect.status, 308); assert.equal(wikiRedirect.location, '/wiki/?lang=en');
           const apiRedirect = await get('craftos.app', '/api');

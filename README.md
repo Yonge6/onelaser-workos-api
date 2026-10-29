@@ -169,7 +169,7 @@ curl --fail --silent --show-error http://127.0.0.1:3001/tasks \
 
 完整部署步骤见 [部署说明](deploy/README.md) · [English deployment guide](deploy/README.en.md)。Docker 镜像固定前端提交，在同一来源提供网页和 `/api`；Render Blueprint 和自有服务器 Compose 均已提供。部署文件不会自动创建收费资源。
 
-知识中心/Wiki 在同源 `/wiki/` 完整提供原公开站：首页、分类、全文搜索、下载、236 篇文章与中英界面；“档案与核对”继续保存有权限控制的人工核对记录。构建固定 `deploy/wiki-revision.txt` 的完整提交，下载器逐项校验 259 个公开文件的 Git blob，再应用分类参数白名单及站内跳转保留语言两处有记录的补丁，原站不变，其余 257 个文件保留原始字节。`/wiki/wiki-build-info.json` 可核验部署版本；图片和外部下载仍使用原链接。该同源固定脚本属于受信应用代码，后续版本须重新审计，不自动跟随原站更新。详见 [知识中心集成与数据边界](docs/company-support.md)。
+知识中心/Wiki 已整合为 Work OS 原生栏目，共用系统导航、字体、中英界面和日夜主题，无 iframe。保留 236 篇原文、8 个分类、全文搜索、52 篇下载指南、完整目录、图片、表格和原始链接；“档案与核对”沿用受授权保护的人工记录。构建仍固定并校验 `deploy/wiki-revision.txt` 的 259 个公开文件，原生栏目从同源 `/wiki/data/` 读取、清理并呈现内容，原站不变。原始图片和下载仍依赖原链接。详见 [知识中心集成与数据边界](docs/company-support.md)。
 
 前端与 API 使用同一 HTTPS 来源，反代 `/api` 时去除前缀。网页登录直接进入 `/api/auth/dingtalk/start`。服务端使用短时 OAuth state 与 HttpOnly 浏览器 nonce，随后按指定企业验证个人 unionId、企业 userId、有效成员和批准部门。只有 `DINGTALK_MANAGER_USER_IDS` 中明确的账号获得负责人角色；不会把首个登录者自动升级。
 

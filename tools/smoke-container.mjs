@@ -14,13 +14,25 @@ assert.ok(healthy, 'Container must start with PostgreSQL and no provider keys');
 const index = await fetch(origin + '/');
 assert.equal(index.status, 200);
 assert.match(index.headers.get('content-security-policy'), /script-src 'self'/);
+const shellCsp = new Map(index.headers.get('content-security-policy').split(';').map(part => {
+  const [name, ...sources] = part.trim().split(/\s+/); return [name, sources.join(' ')];
+}));
+assert.equal(shellCsp.get('frame-src'), "'none'");
+assert.equal(shellCsp.get('frame-ancestors'), "'none'");
+assert.equal(shellCsp.get('img-src'), "'self' data: https://wiki.1laser.com https://zohodesk.1laser.com https://www.1laser.com https://encrypted-tbn0.gstatic.com https://weacrylic.com https://images.openai.com https://api2.mubu.com https://document-image.mubu.com");
+for (const directive of ['default-src', 'script-src', 'connect-src', 'font-src', 'base-uri']) assert.equal(shellCsp.get(directive), "'self'");
+assert.equal(shellCsp.get('object-src'), "'none'");
+assert.equal(shellCsp.get('form-action'), "'self' https://login.dingtalk.com");
 assert.equal(index.headers.get('cache-control'), 'no-store');
 assert.equal(index.headers.get('x-frame-options'), 'DENY');
 assert.equal(index.headers.get('referrer-policy'), 'no-referrer');
 const consentPage = await fetch(origin + '/api/integrations/grok-bot/oauth/requests/' + 'R'.repeat(43));
 assert.equal(consentPage.headers.get('referrer-policy'), 'same-origin', 'Proxy must preserve the consent form origin policy, including error responses');
+assert.match(consentPage.headers.get('content-security-policy'), /(?:^|;)\s*img-src 'self' data:;/);
+assert.match(consentPage.headers.get('content-security-policy'), /(?:^|;)\s*frame-src 'self';/);
+assert.doesNotMatch(consentPage.headers.get('content-security-policy'), /https:\/\/wiki\.1laser\.com/);
 const html = await index.text();
-for (const asset of ['preferences.js', 'runtime-config.js', 'api-client.js', 'live-app.js']) {
+for (const asset of ['preferences.js', 'runtime-config.js', 'api-client.js', 'wiki.js', 'wiki.css', 'company-support.js', 'live-app.js']) {
   assert.ok(html.includes(asset), 'Missing production client asset: ' + asset);
   assert.equal((await fetch(origin + '/' + asset)).status, 200);
 }

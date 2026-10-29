@@ -11,7 +11,7 @@ http://:{$PORT:10000} {
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
         Cache-Control no-store
     }
-    # Only the verified public Wiki can be framed by this application. Every
+    # The original public Wiki keeps its existing framing restriction. Every
     # other same-origin route retains DENY/none, including the employee app/API.
     @not_wiki not path /wiki/*
     header @not_wiki {
@@ -53,6 +53,9 @@ http://:{$PORT:10000} {
         file_server
     }
     handle {
+        # Native Wiki articles render in the employee shell. Permit only their
+        # audited image hosts and disable child frames; API/OAuth policy stays above.
+        header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://wiki.1laser.com https://zohodesk.1laser.com https://www.1laser.com https://encrypted-tbn0.gstatic.com https://weacrylic.com https://images.openai.com https://api2.mubu.com https://document-image.mubu.com; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://login.dingtalk.com"
         root * /app/public
         file_server
     }
