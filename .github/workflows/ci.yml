@@ -33,6 +33,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Test pinned Wiki input safety patch
+        run: node --test test/wiki-safety.test.mjs
       - name: Test with embedded PostgreSQL
         run: npm test
       - name: Test PostgreSQL adapter

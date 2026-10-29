@@ -169,6 +169,8 @@ curl --fail --silent --show-error http://127.0.0.1:3001/tasks \
 
 完整部署步骤见 [部署说明](deploy/README.md) · [English deployment guide](deploy/README.en.md)。Docker 镜像固定前端提交，在同一来源提供网页和 `/api`；Render Blueprint 和自有服务器 Compose 均已提供。部署文件不会自动创建收费资源。
 
+知识中心/Wiki 在同源 `/wiki/` 完整提供原公开站：首页、分类、全文搜索、下载、236 篇文章与中英界面；“档案与核对”继续保存有权限控制的人工核对记录。构建固定 `deploy/wiki-revision.txt` 的完整提交，下载器逐项校验 259 个公开文件的 Git blob，再对分类 URL 参数做一处有记录的安全补丁，原站不变。`/wiki/wiki-build-info.json` 可核验部署版本；图片和外部下载仍使用原链接。该同源固定脚本属于受信应用代码，后续版本须重新审计，不自动跟随原站更新。详见 [知识中心集成与数据边界](docs/company-support.md)。
+
 前端与 API 使用同一 HTTPS 来源，反代 `/api` 时去除前缀。网页登录直接进入 `/api/auth/dingtalk/start`。服务端使用短时 OAuth state 与 HttpOnly 浏览器 nonce，随后按指定企业验证个人 unionId、企业 userId、有效成员和批准部门。只有 `DINGTALK_MANAGER_USER_IDS` 中明确的账号获得负责人角色；不会把首个登录者自动升级。
 
 登录返回 HttpOnly、Secure、SameSite=Lax 会话 Cookie，不把会话放进地址或浏览器存储。前端先读取 `GET /auth/csrf`，写请求带 `X-CSRF-Token`；服务端校验来源、令牌、当前用户和资源权限。`GET /capabilities` 只显示配置状态及缺少的配置名，不返回密钥。配置完整不等于已经在真实租户验收。

@@ -31,6 +31,26 @@ assert.doesNotMatch(runtime, /apiKey|secret|password|token/i);
 const build = await (await fetch(origin + '/build-info.json')).json();
 const pinned = (await readFile(new URL('../deploy/frontend-revision.txt', import.meta.url), 'utf8')).trim();
 assert.equal(build.frontendCommit, pinned);
+const wiki = await fetch(origin + '/wiki/?lang=zh');
+assert.equal(wiki.status, 200);
+assert.equal(wiki.headers.get('x-frame-options'), 'SAMEORIGIN');
+assert.match(wiki.headers.get('content-security-policy'), /frame-ancestors 'self'/);
+assert.match(wiki.headers.get('content-security-policy'), /frame-src 'none'/);
+assert.match(wiki.headers.get('content-security-policy'), /https:\/\/document-image\.mubu\.com/);
+assert.match(await wiki.text(), /\.\/assets\/app\.js/);
+const wikiBuild = await (await fetch(origin + '/wiki/wiki-build-info.json')).json();
+const wikiPin = (await readFile(new URL('../deploy/wiki-revision.txt', import.meta.url), 'utf8')).trim();
+assert.equal(wikiBuild.sourceCommit, wikiPin); assert.equal(wikiBuild.files, 259);
+assert.equal(wikiBuild.articles, 236); assert.equal(wikiBuild.privateOperationsIncluded, false);
+assert.equal(wikiBuild.patches.length, 1);
+assert.equal(wikiBuild.patches[0].id, 'catalog-family-id-allowlist-v1');
+assert.notEqual(wikiBuild.patches[0].sourceSha256, wikiBuild.patches[0].packagedSha256);
+const wikiLibrary = await (await fetch(origin + '/wiki/data/library.json')).json();
+assert.equal(wikiLibrary.articles.length, 236); assert.equal(wikiLibrary.publication_enabled, false);
+assert.equal((await (await fetch(origin + '/wiki/data/search-index.json')).json()).length, 236);
+for (const name of ['assets/app.js', 'assets/locale.js', 'assets/fonts/Certia-Regular.otf', 'data/articles/en-36.json']) {
+  assert.equal((await fetch(origin + '/wiki/' + name)).status, 200, name);
+}
 const health = await (await fetch(origin + '/api/health')).json();
 assert.equal(health.database, 'postgres');
 const capabilities = await (await fetch(origin + '/api/capabilities')).json();
@@ -58,7 +78,7 @@ assert.equal((await fetch(origin + '/api/integrations/grok-bot/mcp', {
   method:'POST', headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
   body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{}})
 })).status, 503);
-for (const path of ['/.env', '/src/server.ts', '/deploy/Caddyfile']) {
+for (const path of ['/.env', '/src/server.ts', '/deploy/Caddyfile', '/wiki/.env', '/wiki/api/tasks', '/wiki/src/server.ts']) {
   assert.equal((await fetch(origin + path)).status, 404);
 }
 console.log('Same-origin container smoke passed: pinned live frontend, PostgreSQL API, CSP, and fail-closed authentication. No provider requests sent.');

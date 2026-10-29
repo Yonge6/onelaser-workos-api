@@ -14,6 +14,10 @@ test('canonical origin switches only the approved Render host and retains health
 }, async t => {
   await mkdir(resolve('.runtime'), { recursive: true });
   const root = await mkdtemp(resolve('.runtime/caddy-redirect-test-'));
+  const wikiRoot = resolve(root, 'wiki');
+  await mkdir(resolve(wikiRoot, 'assets'), { recursive: true });
+  await writeFile(resolve(wikiRoot, 'index.html'), 'complete public wiki');
+  await writeFile(resolve(wikiRoot, 'assets/app.js'), 'public wiki script');
   const upstream = createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ path: req.url, method: req.method }));
@@ -23,7 +27,8 @@ test('canonical origin switches only the approved Render host and retains health
   const upstreamPort = (upstream.address() as { port: number }).port;
   const config = (await readFile(resolve('deploy/Caddyfile'), 'utf8'))
     .replaceAll('127.0.0.1:3001', `127.0.0.1:${upstreamPort}`)
-    .replace('root * /app/public', `root * ${root}`);
+    .replace('root * /app/public', `root * ${root}`)
+    .replace('root * /app/wiki', `root * ${wikiRoot}`);
   const configPath = resolve(root, 'Caddyfile');
   await writeFile(configPath, config);
   await writeFile(resolve(root, 'index.html'), 'workos frontend');
@@ -70,15 +75,43 @@ test('canonical origin switches only the approved Render host and retains health
             const [name, ...sources] = part.trim().split(/\s+/);
             return [name, sources.join(' ')] as const;
           }));
-          // Embed only the original public Wiki path. The parent employee app
-          // stays non-frameable and does not gain remote scripts or API access.
-          assert.equal(csp.get('frame-src'), 'https://yonge6.github.io/onelaser-support-center/');
+          // Only /wiki/* is frameable; all other same-origin routes reject it.
+          assert.equal(csp.get('frame-src'), "'self'");
           assert.equal(csp.get('frame-ancestors'), "'none'");
           assert.equal(publicPage.frameOptions, 'DENY');
           for (const directive of ['default-src', 'script-src', 'connect-src']) {
             assert.equal(csp.get(directive), "'self'");
           }
           assert.equal(csp.get('img-src'), "'self' data:");
+          const wiki = await get('craftos.app', '/wiki/?lang=zh');
+          assert.equal(wiki.status, 200); assert.equal(wiki.body, 'complete public wiki');
+          assert.equal(wiki.frameOptions, 'SAMEORIGIN');
+          assert.equal(wiki.cacheControl, 'no-store');
+          const wikiCsp = new Map(wiki.csp.split(';').map(part => {
+            const [name, ...sources] = part.trim().split(/\s+/);
+            return [name, sources.join(' ')] as const;
+          }));
+          assert.equal(wikiCsp.get('frame-ancestors'), "'self'");
+          for (const directive of ['default-src', 'script-src', 'style-src', 'connect-src', 'font-src', 'form-action']) {
+            assert.equal(wikiCsp.get(directive), "'self'");
+          }
+          for (const directive of ['frame-src', 'media-src', 'object-src', 'base-uri']) {
+            assert.equal(wikiCsp.get(directive), "'none'");
+          }
+          assert.equal(wikiCsp.get('img-src'), "'self' https://wiki.1laser.com https://zohodesk.1laser.com https://www.1laser.com https://encrypted-tbn0.gstatic.com https://weacrylic.com https://images.openai.com https://api2.mubu.com https://document-image.mubu.com");
+          assert.equal((await get('craftos.app', '/wiki/assets/app.js')).body, 'public wiki script');
+          const wikiRedirect = await get('craftos.app', '/wiki?lang=en');
+          assert.equal(wikiRedirect.status, 308); assert.equal(wikiRedirect.location, '/wiki/?lang=en');
+          const apiRedirect = await get('craftos.app', '/api');
+          assert.equal(apiRedirect.status, 308); assert.equal(apiRedirect.location, '/api/');
+          for (const path of ['/wiki/.env', '/wiki/src/server.ts', '/wiki/api/tasks', '/wikievil/']) {
+            assert.equal((await get('craftos.app', path)).status, 404, path);
+          }
+          for (const path of ['/api/tasks', '/wiki', '/wikievil/']) {
+            const protectedRoute = await get('craftos.app', path);
+            assert.equal(protectedRoute.frameOptions, 'DENY', path);
+            assert.match(protectedRoute.csp, /frame-ancestors 'none'/, path);
+          }
           for (const path of ['/healthz', '/api/health']) {
             const response = await get(oldHost, path);
             assert.equal(response.status, 200); assert.equal(response.location, undefined);
