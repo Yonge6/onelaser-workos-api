@@ -1,4 +1,5 @@
 import { supportSchema } from './support.js';
+import { publicWikiSchema } from './public-wiki.js';
 import { okrImportSchema } from './okr-import.js';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
@@ -188,7 +189,7 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 CREATE INDEX IF NOT EXISTS task_scope_idx ON tasks(org_id, department_id, owner_id);
 CREATE INDEX IF NOT EXISTS audit_scope_idx ON audit_events(org_id, department_id, owner_id);
 `;
-export const schema = coreSchema + supportSchema + okrImportSchema;
+export const schema = coreSchema + supportSchema + okrImportSchema + publicWikiSchema;
 
 export async function seedDemo(db: Database) {
   const users = [
