@@ -1,3 +1,4 @@
+import { registerTaskBoardRoutes, validateBoardCreation } from './task-board.js';
 import { registerSupportRoutes, supportPermissions, type SupportOptions } from './support.js';
 import { registerPublicWikiRoutes, PUBLIC_WIKI_PATHS, type PublicWikiOptions } from './public-wiki.js';
 import { registerShopifyRoutes, type ShopifyOptions } from './shopify.js';
@@ -24,7 +25,7 @@ const evidenceUrl = z.string().max(2000).url().refine(value => {
 const taskInput = z.object({
   title: z.string().trim().min(3).max(200), description: z.string().trim().min(1).max(10000),
   ownerId: identifier, reviewerId: identifier.optional(), criteria: z.array(z.string().trim().min(1).max(1000)).min(1).max(20),
-  dueAt: z.string().datetime({ offset: true }), krId: identifier.optional()
+  dueAt: z.string().datetime({ offset: true }), krId: identifier.optional(), boardGroupId:identifier.optional(), boardPriority:z.string().max(80).optional(), boardCategory:z.string().max(80).optional(), parentTaskId:identifier.optional()
 }).strict();
 const submissionInput = z.object({ expectedVersion, title:z.string().trim().min(3).max(200), description:z.string().trim().min(10).max(30000), evidenceUrl:evidenceUrl.optional() }).strict();
 const reviewInput = z.object({ expectedVersion, submissionVersion:z.number().int().min(1), decision:z.enum(['accept','return']), quality:z.number().int().min(0).max(100).optional(), note:z.string().trim().min(5).max(4000), verifiedCurrentSubmission:z.boolean().optional() }).strict();
@@ -119,6 +120,7 @@ export async function buildApp(options:AppOptions) {
   registerSupportRoutes(app,db,options.support,integrations.executiveUserIds);
   registerPublicWikiRoutes(app,db,options.publicWiki,options.support,integrations.executiveUserIds);
   registerShopifyRoutes(app,db,options.shopify,options.support,integrations.executiveUserIds);
+  registerTaskBoardRoutes(app,db);
   app.get('/tasks',async req=>{
     const user=actor(req),[where,params]=scope(user);
     return {items:(await db.query(`SELECT * FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};
@@ -133,8 +135,9 @@ export async function buildApp(options:AppOptions) {
       const reviewer=(await tx.query<User>(input.reviewerId?'SELECT * FROM users WHERE id=$1 AND active=true':'SELECT * FROM users WHERE org_id=$1 AND department_id=$2 AND role=$3 AND active=true AND id<>$4 ORDER BY id LIMIT 1',input.reviewerId?[input.reviewerId]:[user.org_id,user.department_id,'manager',owner.id])).rows[0];
       if(!reviewer||reviewer.role!=='manager'||reviewer.id===owner.id||reviewer.org_id!==user.org_id||reviewer.department_id!==user.department_id) deny(400,'INVALID_REVIEWER','Select a different authorized manager in this department');
       if(input.krId){const kr=await loadKr(tx,input.krId);if(!visibleObjective(user,kr)||!visibleObjective(owner,kr))deny(400,'INVALID_KR','The linked key result must be visible to the task owner');}
+      const groupId=await validateBoardCreation(tx,user,input);
       const id=randomUUID();
-      const task=(await tx.query('INSERT INTO tasks(id,org_id,department_id,owner_id,reviewer_id,created_by,title,description,criteria,baseline_due_at,due_at,kr_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11) RETURNING *',[id,user.org_id,user.department_id,owner.id,reviewer.id,user.id,input.title,input.description,JSON.stringify(input.criteria),input.dueAt,input.krId||null])).rows[0];
+      const task=(await tx.query('INSERT INTO tasks(id,org_id,department_id,owner_id,reviewer_id,created_by,title,description,criteria,baseline_due_at,due_at,kr_id,board_group_id,board_priority,board_category,parent_task_id,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11,$12,$13,$14,$15,$6) RETURNING *',[id,user.org_id,user.department_id,owner.id,reviewer.id,user.id,input.title,input.description,JSON.stringify(input.criteria),input.dueAt,input.krId||null,groupId,input.boardPriority||'',input.boardCategory||'',input.parentTaskId||null])).rows[0];
       await audit(tx,user,'task.created',id,{version:1},owner.id);return task;
     });return reply.code(201).send(result);
   });
@@ -146,7 +149,7 @@ export async function buildApp(options:AppOptions) {
       if(task.version!==input.expectedVersion) deny(409,'VERSION_CONFLICT','Task changed; reload before submitting');
       const version=task.submission_version+1;
       const submission=(await tx.query('INSERT INTO submissions(id,task_id,version,submitted_by,title,description,evidence_url) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[randomUUID(),id,version,user.id,input.title,input.description,input.evidenceUrl||null])).rows[0];
-      await tx.query('UPDATE tasks SET version=version+1,submission_version=$2,status=$3 WHERE id=$1',[id,version,'submitted']);
+      await tx.query('UPDATE tasks SET version=version+1,submission_version=$2,status=$3,board_status=$4,board_done_at=NULL,updated_at=now(),updated_by=$5 WHERE id=$1',[id,version,'submitted','review',user.id]);
       await audit(tx,user,'submission.created',id,{submissionVersion:version,previousReviewInvalidated:true},task.owner_id);return {submission,taskVersion:task.version+1};
     });return reply.code(201).send(result);
   });
@@ -160,7 +163,7 @@ export async function buildApp(options:AppOptions) {
       if(task.version!==input.expectedVersion||task.submission_version!==input.submissionVersion||task.status!=='submitted') deny(409,'VERSION_CONFLICT','Review must match the currently submitted version');
       if(input.decision==='accept'&&(input.quality===undefined||input.verifiedCurrentSubmission!==true)) deny(400,'HUMAN_VERIFICATION_REQUIRED','A quality score and actual evidence verification are required');
       const review=(await tx.query('INSERT INTO reviews(id,task_id,submission_version,reviewer_id,decision,quality,note) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[randomUUID(),id,input.submissionVersion,user.id,input.decision,input.decision==='accept'?input.quality:null,input.note])).rows[0];
-      await tx.query('UPDATE tasks SET version=version+1,status=$2 WHERE id=$1',[id,input.decision==='accept'?'accepted':'revision']);
+      await tx.query('UPDATE tasks SET version=version+1,status=$2,board_status=$3,board_done_at=$4,updated_at=now(),updated_by=$5 WHERE id=$1',[id,input.decision==='accept'?'accepted':'revision',input.decision==='accept'?'done':'working',input.decision==='accept'?new Date().toISOString():null,user.id]);
       await audit(tx,user,'review.'+input.decision,id,{submissionVersion:input.submissionVersion,quality:review.quality},task.owner_id);return {review,taskVersion:task.version+1};
     });return reply.code(201).send(result);
   });

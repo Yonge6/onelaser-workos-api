@@ -10,6 +10,20 @@ export function languageFrom(header?:string):Language {
   return preferences[0]?.tag as Language || 'zh';
 }
 const zh:Record<string,string>={
+  'Select an existing board label':'请选择已有的看板标签。',
+  'Select an active group':'请选择尚未归档的分组。',
+  'Select a visible top-level parent task':'请选择有权限查看的顶层父任务。',
+  'A manager must edit shared board settings':'共享分组与标签需由负责人设置。',
+  'Board settings changed; reload before saving':'看板设置已更新，请刷新后再保存。',
+  'Move tasks before removing their group':'请先移走任务，再删除分组。',
+  'A category is in use':'此分类仍有任务在使用。',
+  'Completed is managed by the seven-day completion rule':'Completed 分组由完成满 7 天的规则自动管理。',
+  'A manager must move a parent with other owners':'父任务包含其他员工的子任务，需由负责人移动。',
+  'Move the parent task to move its subitems':'请移动父任务，子任务会一起移入对应分组。',
+  'A manager must reassign tasks':'任务分派需由负责人调整。',
+  'Tasks with submitted evidence keep their original owner and reviewer':'已有成果提交的任务保留原负责人和验收人，以保留完整验收记录。',
+  'Select an active owner and a different authorized reviewer':'请选择有效负责人，以及另一位有权限的验收人。',
+
   'This key result has no quantitative metric configured':'此关键结果尚未配置量化指标，不能记录数值进度。',
   'Only the objective owner can self-evaluate':'只有目标负责人可以提交成果与自评。',
   'A different manager must verify the result':'须由另一位有权限的负责人核定成果。',

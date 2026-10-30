@@ -1,3 +1,4 @@
+import { boardSchema } from './task-board.js';
 import { supportSchema } from './support.js';
 import { publicWikiSchema } from './public-wiki.js';
 import { okrImportSchema } from './okr-import.js';
@@ -189,7 +190,7 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 CREATE INDEX IF NOT EXISTS task_scope_idx ON tasks(org_id, department_id, owner_id);
 CREATE INDEX IF NOT EXISTS audit_scope_idx ON audit_events(org_id, department_id, owner_id);
 `;
-export const schema = coreSchema + supportSchema + okrImportSchema + publicWikiSchema;
+export const schema = coreSchema + boardSchema + supportSchema + okrImportSchema + publicWikiSchema;
 
 export async function seedDemo(db: Database) {
   const users = [
