@@ -21,6 +21,8 @@ UPDATE tasks SET board_status=CASE WHEN status='accepted' THEN 'done' WHEN statu
 CREATE INDEX IF NOT EXISTS task_board_parent ON tasks(parent_task_id);
 CREATE TABLE IF NOT EXISTS task_board_config(org_id text NOT NULL,department_id text NOT NULL,version integer NOT NULL DEFAULT 1,data jsonb NOT NULL,PRIMARY KEY(org_id,department_id));
 CREATE TABLE IF NOT EXISTS task_board_views(user_id text PRIMARY KEY REFERENCES users(id),org_id text NOT NULL,data jsonb NOT NULL);
+CREATE TABLE IF NOT EXISTS task_updates(id text PRIMARY KEY,task_id text NOT NULL REFERENCES tasks(id),org_id text NOT NULL,actor_id text NOT NULL REFERENCES users(id),body text NOT NULL,created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS task_updates_task ON task_updates(task_id,created_at,id);
 `;
 const id=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/);
 const color=z.string().regex(/^#[0-9a-fA-F]{6}$/);
@@ -40,7 +42,8 @@ const configInput=z.object({expectedVersion:z.number().int().positive(),groups:z
  if(!statusIds.every(x=>v.status.some(g=>g.id===x))||!priorityIds.every(x=>v.priority.some(g=>g.id===x)))c.addIssue({code:'custom',path:['status'],message:'Stable label identifiers required'});
  if(v.category.some(x=>!x.id))c.addIssue({code:'custom',path:['category'],message:'Blank category is reserved'});
 });
-const viewInput=z.object({sort:z.array(z.object({field:z.enum(['priority','due','category','title','updated','status']),direction:z.enum(['asc','desc'])}).strict()).max(5),groupBy:z.enum(['group','priority','status','category','owner','due']),hidden:z.array(z.enum(['owner','priority','status','category','due','notes','updated'])).max(7),collapsed:z.array(id).max(200)}).strict();
+const width=z.number().int().min(64).max(700);
+const viewInput=z.object({sort:z.array(z.object({field:z.enum(['priority','due','category','title','updated','status']),direction:z.enum(['asc','desc'])}).strict()).max(5),groupBy:z.enum(['group','priority','status','category','owner','due']),hidden:z.array(z.enum(['owner','priority','status','category','due','notes','updated'])).max(7),collapsed:z.array(id).max(200),display:z.enum(['table','kanban','calendar','dashboard']).optional(),scope:z.enum(['team','mine']).optional(),showWeekends:z.boolean().optional(),widths:z.object({title:z.number().int().min(180).max(700).optional(),owner:width.optional(),priority:width.optional(),status:width.optional(),category:width.optional(),due:width.optional(),notes:width.optional(),updated:width.optional()}).strict().optional()}).strict();
 const patchInput=z.object({expectedVersion:z.number().int().positive(),title:z.string().trim().min(3).max(200).optional(),priority:z.string().max(80).optional(),status:z.enum(['working','hold','review','done','not_started']).optional(),category:z.string().max(80).optional(),groupId:id.optional(),notes:z.string().max(10000).optional(),dueAt:z.string().datetime({offset:true}).optional(),ownerId:id.optional(),reviewerId:id.optional()}).strict().refine(v=>Object.keys(v).length>1);
 export async function boardConfig(tx:Queryable,user:User){
  await tx.query('INSERT INTO task_board_config(org_id,department_id,data) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[user.org_id,user.department_id,JSON.stringify(defaultBoardConfig())]);
@@ -62,11 +65,11 @@ export function registerTaskBoardRoutes(app:FastifyInstance,db:Database){
  app.get('/task-board',async req=>{
   const user=actor(req.actor),config=await boardConfig(db,user);
   // Scope before any parent/group calculation: hidden tasks never contribute names or counts.
-  const tasks=(await db.query('SELECT * FROM tasks WHERE org_id=$1 AND department_id=$2'+(user.role==='manager'?'':' AND owner_id=$3')+' ORDER BY created_at,id LIMIT 1000',user.role==='manager'?[user.org_id,user.department_id]:[user.org_id,user.department_id,user.id])).rows;
+  const tasks=(await db.query('SELECT tasks.*,(SELECT count(*)::int FROM task_updates u WHERE u.task_id=tasks.id AND u.org_id=tasks.org_id) AS update_count FROM tasks WHERE org_id=$1 AND department_id=$2'+(user.role==='manager'?'':' AND owner_id=$3')+' ORDER BY created_at,id LIMIT 1000',user.role==='manager'?[user.org_id,user.department_id]:[user.org_id,user.department_id,user.id])).rows;
   const allChildren=(await db.query('SELECT parent_task_id,board_status,board_done_at FROM tasks WHERE org_id=$1 AND department_id=$2 AND parent_task_id IS NOT NULL',[user.org_id,user.department_id])).rows;
   const now=Date.now(),items=tasks.map(t=>({...t,effective_group_id:effectiveGroup(t,allChildren,now)}));
   const view=(await db.query('SELECT data FROM task_board_views WHERE user_id=$1 AND org_id=$2',[user.id,user.org_id])).rows[0]?.data;
-  return {items,config:config.data,version:config.version,view:view||{sort:[{field:'priority',direction:'asc'},{field:'due',direction:'asc'},{field:'category',direction:'asc'}],groupBy:'group',hidden:[],collapsed:[]},serverNow:new Date(now).toISOString(),limit:1000};
+  return {items,config:config.data,version:config.version,view:view||{sort:[{field:'priority',direction:'asc'},{field:'due',direction:'asc'},{field:'category',direction:'asc'}],groupBy:'group',hidden:[],collapsed:[]},scope:{kind:user.role==='manager'?'department':'assigned',departmentId:user.department_id},serverNow:new Date(now).toISOString(),limit:1000};
  });
  app.post('/task-board/config',async req=>{
   const user=actor(req.actor),v=configInput.parse(req.body);if(user.role!=='manager')deny(403,'FORBIDDEN','A manager must edit shared board settings');
@@ -83,6 +86,24 @@ export function registerTaskBoardRoutes(app:FastifyInstance,db:Database){
   });
  });
  app.post('/task-board/view',async req=>{const user=actor(req.actor),v=viewInput.parse(req.body);await db.query('INSERT INTO task_board_views(user_id,org_id,data) VALUES($1,$2,$3) ON CONFLICT(user_id) DO UPDATE SET org_id=excluded.org_id,data=excluded.data',[user.id,user.org_id,JSON.stringify(v)]);return {saved:true};});
+ app.get<{Params:{id:string}}>('/tasks/:id/updates',async req=>{
+  const user=actor(req.actor),task=(await db.query('SELECT * FROM tasks WHERE id=$1',[id.parse(req.params.id)])).rows[0];
+  if(!visibleTask(user,task))deny(404,'NOT_FOUND','Task not found');
+  const items=(await db.query('SELECT u.id,u.body,u.created_at,u.actor_id,p.display_name FROM task_updates u JOIN users p ON p.id=u.actor_id WHERE u.task_id=$1 AND u.org_id=$2 ORDER BY u.created_at DESC,u.id DESC LIMIT 200',[task.id,user.org_id])).rows.reverse();
+  return {items,limit:200,notificationsSent:false};
+ });
+ app.post<{Params:{id:string}}>('/tasks/:id/updates',async(req,reply)=>{
+  const user=actor(req.actor),taskId=id.parse(req.params.id),v=z.object({requestId:z.string().uuid(),expectedVersion:z.number().int().positive(),body:z.string().trim().min(1).max(10000)}).strict().parse(req.body);
+  return db.transaction(async tx=>{
+   const task=(await tx.query('SELECT * FROM tasks WHERE id=$1 FOR UPDATE',[taskId])).rows[0];if(!visibleTask(user,task))deny(404,'NOT_FOUND','Task not found');
+   const old=(await tx.query('SELECT * FROM task_updates WHERE id=$1',[v.requestId])).rows[0];
+   if(old){if(old.task_id!==taskId||old.org_id!==user.org_id||old.actor_id!==user.id||old.body!==v.body)deny(409,'VERSION_CONFLICT','Update request already used');return {id:old.id,stored:true,notificationsSent:false};}
+   if(task.version!==v.expectedVersion)deny(409,'VERSION_CONFLICT','Task changed; reload before posting');
+   await tx.query('INSERT INTO task_updates(id,task_id,org_id,actor_id,body) VALUES($1,$2,$3,$4,$5)',[v.requestId,taskId,user.org_id,user.id,v.body]);
+   await log(tx,user,'task.update.posted',taskId,{updateId:v.requestId,acceptanceUnchanged:true},task.owner_id);
+   reply.code(201);return {id:v.requestId,stored:true,notificationsSent:false};
+  });
+ });
  app.post<{Params:{id:string}}>('/tasks/:id/board',async req=>{
   const user=actor(req.actor),v=patchInput.parse(req.body),taskId=id.parse(req.params.id);
   return db.transaction(async tx=>{

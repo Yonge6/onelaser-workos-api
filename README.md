@@ -208,3 +208,10 @@ current manager result. Other employees cannot inspect these private evaluations
 新增周期、权重、地点、任务类型、奖励项参与开关、成果、自评、主管评分和评分截止日期。
 评分版本和历史审计独立保存。新版明确采用主管核定分，不推断原钉钉综合公式；
 当前不自动迁移历史表、不代替人工验收、不生成员工去留结论。
+
+
+### Team task views and internal updates
+
+The pinned frontend provides Team board/My Work, Table/Kanban/Calendar/Dashboard, and per-user view/column preferences. `POST /task-board/view` accepts optional `display`, `scope`, `showWeekends` and bounded `widths`; existing saved views remain valid. Scope selection never expands authorization.
+
+`GET /tasks/:id/updates` returns the most recent 200 internal updates, chronological within that window, after existing task visibility checks. `POST /tasks/:id/updates` accepts `{requestId, expectedVersion, body}` (UUID, current task version, 1–10000 trimmed characters). It stores an append-only internal note and audit entry; matching retries are idempotent, conflicting UUID reuse/stale context returns409. No customer messages, notifications, task status or evidence decisions are triggered. `/task-board` includes each visible task's `update_count` and actual department/assigned scope. The additive `task_updates` table/index is initialized alongside the existing board schema.
