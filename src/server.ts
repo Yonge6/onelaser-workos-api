@@ -1,4 +1,5 @@
 import { supportOptionsFromEnv } from './support.js';
+import { caldockOptionsFromEnv } from './caldock.js';
 import { publicWikiOptionsFromEnv } from './public-wiki.js';
 import { shopifyOptionsFromEnv } from './shopify.js';
 import { buildApp } from './app.js';
@@ -13,7 +14,7 @@ try {
   const db=await createDatabase({connectionString:process.env.DATABASE_URL||undefined,dataDir:process.env.PGLITE_DATA_DIR||'.runtime/pglite'});
   await db.exec(schema);
   if(process.env.SEED_DEMO==='true'&&!production) await seedDemo(db);
-  const app=await buildApp({db,environment:process.env.NODE_ENV,allowDevLogin:process.env.ALLOW_DEV_LOGIN==='true',devLoginSecret:process.env.DEV_LOGIN_SECRET,support:supportOptionsFromEnv(process.env),publicWiki:publicWikiOptionsFromEnv(process.env),shopify:shopifyOptionsFromEnv(process.env),integrations:integrationOptionsFromEnv(process.env)});
+  const app=await buildApp({db,environment:process.env.NODE_ENV,allowDevLogin:process.env.ALLOW_DEV_LOGIN==='true',devLoginSecret:process.env.DEV_LOGIN_SECRET,support:supportOptionsFromEnv(process.env),publicWiki:publicWikiOptionsFromEnv(process.env),shopify:shopifyOptionsFromEnv(process.env),integrations:integrationOptionsFromEnv(process.env),caldock:caldockOptionsFromEnv(process.env)});
   const port=Number(process.env.PORT||3001);
   if(!Number.isInteger(port)||port<1||port>65535) throw new Error('Invalid port');
   await app.listen({host:process.env.HOST||'127.0.0.1',port});

@@ -1,4 +1,5 @@
 import { registerTaskBoardRoutes, validateBoardCreation } from './task-board.js';
+import { registerCaldockRoutes, type CaldockOptions } from './caldock.js';
 import { registerSupportRoutes, supportPermissions, type SupportOptions } from './support.js';
 import { registerPublicWikiRoutes, PUBLIC_WIKI_PATHS, type PublicWikiOptions } from './public-wiki.js';
 import { registerShopifyRoutes, type ShopifyOptions } from './shopify.js';
@@ -30,7 +31,7 @@ const taskInput = z.object({
 const submissionInput = z.object({ expectedVersion, title:z.string().trim().min(3).max(200), description:z.string().trim().min(10).max(30000), evidenceUrl:evidenceUrl.optional() }).strict();
 const reviewInput = z.object({ expectedVersion, submissionVersion:z.number().int().min(1), decision:z.enum(['accept','return']), quality:z.number().int().min(0).max(100).optional(), note:z.string().trim().min(5).max(4000), verifiedCurrentSubmission:z.boolean().optional() }).strict();
 const measurementInput = z.object({ expectedVersion, actual:z.number().finite(), source:z.string().trim().min(3).max(2000), note:z.string().trim().min(5).max(4000) }).strict();
-export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean; integrations?:IntegrationOptions; support?:SupportOptions; publicWiki?:PublicWikiOptions; shopify?:ShopifyOptions };
+export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean; integrations?:IntegrationOptions; support?:SupportOptions; publicWiki?:PublicWikiOptions; shopify?:ShopifyOptions; caldock?:CaldockOptions };
 
 function actor(req: FastifyRequest): User { return req.actor || deny(401,'UNAUTHENTICATED','Authentication is required'); }
 function scope(user: User) { return user.role === 'manager' ? ['org_id=$1 AND department_id=$2',[user.org_id,user.department_id]] as const : ['org_id=$1 AND owner_id=$2',[user.org_id,user.id]] as const; }
@@ -72,6 +73,9 @@ export async function buildApp(options:AppOptions) {
     req.language=languageFrom(req.headers['accept-language']);
     reply.header('Content-Language',req.language).header('Cache-Control','no-store').header('X-Content-Type-Options','nosniff').header('Referrer-Policy','no-referrer');
     const requestPath=req.url.split('?')[0];
+    // This namespace has its own customer identities, cookies, CSRF and admin checks.
+    // It never accepts a Work OS employee session or bypasses another API namespace.
+    if(requestPath.startsWith('/caldock/')) return;
     if(publicPaths.has(requestPath)||/^\/integrations\/grok-bot\/oauth\/requests\/[A-Za-z0-9_-]{43}$/.test(requestPath)) return;
     const cookieToken=readCookie(req.headers.cookie,sessionCookieName(integrations.secureCookies));
     const token=req.headers.authorization?(req.headers.authorization.startsWith('Bearer ')?req.headers.authorization.slice(7):undefined):cookieToken;
@@ -118,6 +122,7 @@ export async function buildApp(options:AppOptions) {
   app.get('/me',async req=>({...actor(req),executiveAccess:isExecutive(actor(req)),supportAccess:supportPermissions(actor(req),options.support||{},integrations.executiveUserIds||[])}));
   app.get('/executive/summary',async req=>{const user=actor(req);if(!isExecutive(user))deny(403,'FORBIDDEN','Executive access is required');return db.transaction(tx=>executiveSummary(tx,user.org_id,integrations.teamMode));});
   registerSupportRoutes(app,db,options.support,integrations.executiveUserIds);
+  await registerCaldockRoutes(app,db,{...options.caldock,secureCookies:environment==='production'||options.caldock?.secureCookies===true});
   registerPublicWikiRoutes(app,db,options.publicWiki,options.support,integrations.executiveUserIds);
   registerShopifyRoutes(app,db,options.shopify,options.support,integrations.executiveUserIds);
   registerTaskBoardRoutes(app,db);

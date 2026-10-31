@@ -10,7 +10,7 @@ http://:{$PORT:10000} {
         ?Referrer-Policy no-referrer
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
     }
-    @private_or_uncached not path /wiki/data/* /wiki/assets/*
+    @private_or_uncached not path /wiki/data/* /wiki/assets/* /caldock/assets/*
     header @private_or_uncached Cache-Control no-store
     # The original public Wiki keeps its existing framing restriction. Every
     # other same-origin route retains DENY/none, including the employee app/API.
@@ -40,6 +40,16 @@ http://:{$PORT:10000} {
     }
     handle /api {
         redir * /api/ 308
+    }
+    handle /caldock {
+        redir * /caldock/?{http.request.uri.query} 308
+    }
+    @caldock_public_assets path /caldock/assets/*
+    header @caldock_public_assets Cache-Control "public, max-age=86400"
+    handle_path /caldock/* {
+        header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        root * /app/caldock
+        file_server
     }
     handle /wiki {
         redir * /wiki/?{http.request.uri.query} 308

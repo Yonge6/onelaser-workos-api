@@ -11,6 +11,10 @@ RUN node tools/fetch-frontend.mjs /frontend
 COPY tools/fetch-wiki.mjs tools/wiki-safety.mjs ./tools/
 COPY deploy/wiki-revision.txt ./deploy/wiki-revision.txt
 RUN node tools/fetch-wiki.mjs /wiki
+COPY tools/fetch-caldock.mjs ./tools/fetch-caldock.mjs
+COPY deploy/caldock-revision.txt ./deploy/caldock-revision.txt
+RUN node tools/fetch-caldock.mjs /caldock-source
+RUN cd /caldock-source && npm ci --no-audit --no-fund && npm run build
 
 FROM caddy:2 AS edge
 # Render drops capabilities; the edge listens on an unprivileged PORT.
@@ -26,6 +30,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/build ./build
 COPY --from=build --chown=node:node /frontend ./public
 COPY --from=build --chown=node:node /wiki ./wiki
+COPY --from=build --chown=node:node /caldock-source/dist/client ./caldock
 COPY --from=edge /usr/bin/caddy /usr/bin/caddy
 COPY deploy/Caddyfile deploy/container-start.sh ./deploy/
 USER node
