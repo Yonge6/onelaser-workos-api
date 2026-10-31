@@ -44,7 +44,7 @@ test('independent fields merge, same-field stale and ABA edits conflict; retries
  const aba=await send('editor','PATCH','/state',change(s,annual,150));assert.equal(aba.statusCode,409);
 });
 test('malformed paths, out-of-range values and incomplete models cannot corrupt persisted state',async()=>{
- const s=await state();for(const [path,value]of [[['scenarios','pilot','values','annual'],-1],[['scenarios','pilot','values','monthly'],'123'],[['scenarios','__proto__','polluted'],true],[['marketing','tasks','t1','due'],'not-a-date'],[['scenarios','pilot'],{}]] as [string[],unknown][]){const r=await send('editor','PATCH','/state',change(s,path,value));assert.equal(r.statusCode,400,r.body);}
+ const s=await state();for(const [path,value]of [[['scenarios','pilot','values','annual'],-1],[['scenarios','pilot','values','monthly'],'123'],[['scenarios','pilot','values','monthlyCommissionMonths'],-1],[['scenarios','pilot','values','monthlyCommissionMonths'],121],[['scenarios','pilot','values','monthlyCommissionMonths'],'invalid'],[['scenarios','pilot','values','monthlyCommissionMonths'],null],[['scenarios','pilot','values','monthlyCommissionMonths'],1.5],[['scenarios','__proto__','polluted'],true],[['marketing','tasks','t1','due'],'not-a-date'],[['scenarios','pilot'],{}]] as [string[],unknown][]){const r=await send('editor','PATCH','/state',change(s,path,value));assert.equal(r.statusCode,400,r.body);}
  assert.deepEqual(await state(),s);
 });
 test('shared history and field restore append a new revision without erasing later independent changes',async()=>{
@@ -54,10 +54,18 @@ test('shared history and field restore append a new revision without erasing lat
  const h=(await app.inject('/caldock/studio/history')).json().history;assert.equal(h.length,4);assert.equal(h[0].restored_from,target.id);assert.equal(h[0].operation,'restore');
  const stale=await send('editor','POST','/history/'+target.id+'/restore',{revision:s.revision,requestId:randomUUID()});assert.equal(stale.statusCode,409);
 });
-test('owner-only import uses a revision precondition; role changes enforce last-owner and immediate revocation',async()=>{
- const s=await state();const payload={state:s.state,revision:s.revision,requestId:randomUUID()};
+test('legacy imports keep old commissions and default to six months; owner and revision checks remain enforced',async()=>{
+ const s=await state(),legacy=structuredClone(s.state);
+ for(const {values} of Object.values(legacy.scenarios) as {values:Record<string,number>}[]){
+  Object.assign(values,{monthlyFirst:20,monthlyRepeat:10,quarterCommission:8,annualCommission:8});
+  delete values.monthlyCommissionMonths;
+ }
+ const payload={state:legacy,revision:s.revision,requestId:randomUUID()};
  assert.equal((await send('editor','POST','/import',payload)).statusCode,403);
- assert.equal((await send('owner','POST','/import',payload)).statusCode,200);
+ const imported=await send('owner','POST','/import',payload);assert.equal(imported.statusCode,200,imported.body);
+ const expected=structuredClone(legacy);
+ for(const {values} of Object.values(expected.scenarios) as {values:Record<string,number>}[])values.monthlyCommissionMonths=6;
+ assert.deepEqual(imported.json().state,expected);
  assert.equal((await send('owner','POST','/import',{...payload,requestId:randomUUID()})).statusCode,409);
  assert.equal((await send('owner','PUT','/members/'+users.owner.id,{role:null,expectedRole:'owner'})).statusCode,409);
  assert.equal((await send('owner','PUT','/members/'+users.editor.id,{role:'viewer',expectedRole:'editor'})).statusCode,200);
