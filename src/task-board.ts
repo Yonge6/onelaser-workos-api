@@ -90,16 +90,16 @@ export function registerTaskBoardRoutes(app:FastifyInstance,db:Database){
  app.get<{Params:{id:string}}>('/tasks/:id/updates',async req=>{
   const user=actor(req.actor),task=(await db.query('SELECT * FROM tasks WHERE id=$1',[id.parse(req.params.id)])).rows[0];
   if(!visibleTask(user,task))deny(404,'NOT_FOUND','Task not found');
-  const items=(await db.query('SELECT u.id,u.body,u.created_at,u.actor_id,p.display_name FROM task_updates u JOIN users p ON p.id=u.actor_id WHERE u.task_id=$1 AND u.org_id=$2 ORDER BY u.created_at DESC,u.id DESC LIMIT 200',[task.id,user.org_id])).rows.reverse();
+  const items=(await db.query('SELECT u.id,u.body,u.created_at,u.actor_id,p.display_name FROM task_updates u JOIN users p ON p.id=u.actor_id WHERE u.task_id=$1 AND u.org_id=$2 ORDER BY u.created_at DESC,u.id DESC LIMIT 2000',[task.id,user.org_id])).rows.reverse();
   return {items,limit:200,notificationsSent:false};
  });
  app.post<{Params:{id:string}}>('/tasks/:id/updates',async(req,reply)=>{
-  const user=actor(req.actor),taskId=id.parse(req.params.id),v=z.object({requestId:z.string().uuid(),expectedVersion:z.number().int().positive(),body:z.string().trim().min(1).max(10000)}).strict().parse(req.body);
+  const user=actor(req.actor),taskId=id.parse(req.params.id),v=z.object({requestId:z.string().uuid(),expectedVersion:z.number().int().positive().optional(),body:z.string().trim().min(1).max(10000)}).strict().parse(req.body);
   return db.transaction(async tx=>{
    const task=(await tx.query('SELECT * FROM tasks WHERE id=$1 FOR UPDATE',[taskId])).rows[0];if(!visibleTask(user,task))deny(404,'NOT_FOUND','Task not found');
    const old=(await tx.query('SELECT * FROM task_updates WHERE id=$1',[v.requestId])).rows[0];
    if(old){if(old.task_id!==taskId||old.org_id!==user.org_id||old.actor_id!==user.id||old.body!==v.body)deny(409,'VERSION_CONFLICT','Update request already used');return {id:old.id,stored:true,notificationsSent:false};}
-   if(task.version!==v.expectedVersion)deny(409,'VERSION_CONFLICT','Task changed; reload before posting');
+   // Updates are an append-only log: post as many as needed, even while others edit the task.
    await tx.query('INSERT INTO task_updates(id,task_id,org_id,actor_id,body) VALUES($1,$2,$3,$4,$5)',[v.requestId,taskId,user.org_id,user.id,v.body]);
    await log(tx,user,'task.update.posted',taskId,{updateId:v.requestId,acceptanceUnchanged:true},task.owner_id);
    reply.code(201);return {id:v.requestId,stored:true,notificationsSent:false};
