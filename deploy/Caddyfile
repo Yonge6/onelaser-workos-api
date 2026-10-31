@@ -41,6 +41,13 @@ http://:{$PORT:10000} {
     handle /api {
         redir * /api/ 308
     }
+    handle /decision-studio {
+        redir * /decision-studio/?{http.request.uri.query} 308
+    }
+    handle_path /decision-studio/* {
+        root * /app/caldock/decision-studio
+        file_server
+    }
     handle /caldock {
         redir * /caldock/?{http.request.uri.query} 308
     }
