@@ -54,7 +54,7 @@ test('shared history and field restore append a new revision without erasing lat
  const h=(await app.inject('/caldock/studio/history')).json().history;assert.equal(h.length,4);assert.equal(h[0].restored_from,target.id);assert.equal(h[0].operation,'restore');
  const stale=await send('editor','POST','/history/'+target.id+'/restore',{revision:s.revision,requestId:randomUUID()});assert.equal(stale.statusCode,409);
 });
-test('legacy imports keep old commissions and default to six months; owner and revision checks remain enforced',async()=>{
+test('legacy imports preserve old commissions and the missing term; owner and revision checks remain enforced',async()=>{
  const s=await state(),legacy=structuredClone(s.state);
  for(const {values} of Object.values(legacy.scenarios) as {values:Record<string,number>}[]){
   Object.assign(values,{monthlyFirst:20,monthlyRepeat:10,quarterCommission:8,annualCommission:8});
@@ -63,14 +63,36 @@ test('legacy imports keep old commissions and default to six months; owner and r
  const payload={state:legacy,revision:s.revision,requestId:randomUUID()};
  assert.equal((await send('editor','POST','/import',payload)).statusCode,403);
  const imported=await send('owner','POST','/import',payload);assert.equal(imported.statusCode,200,imported.body);
- const expected=structuredClone(legacy);
- for(const {values} of Object.values(expected.scenarios) as {values:Record<string,number>}[])values.monthlyCommissionMonths=6;
- assert.deepEqual(imported.json().state,expected);
+ assert.deepEqual(imported.json().state,legacy);
+ assert.deepEqual((await state()).state,legacy);
  assert.equal((await send('owner','POST','/import',{...payload,requestId:randomUUID()})).statusCode,409);
  assert.equal((await send('owner','PUT','/members/'+users.owner.id,{role:null,expectedRole:'owner'})).statusCode,409);
  assert.equal((await send('owner','PUT','/members/'+users.editor.id,{role:'viewer',expectedRole:'editor'})).statusCode,200);
  assert.equal((await send('editor','PATCH','/state',change(await state(),annual,160))).statusCode,403);
  assert.equal((await send('owner','PUT','/members/'+users.editor.id,{role:'editor',expectedRole:'viewer'})).statusCode,200);
+});
+test('queued legacy term edits survive unrelated writes while real term changes still conflict',async()=>{
+ const term=['scenarios','pilot','values','monthlyCommissionMonths'],repeat=['scenarios','pilot','values','monthlyRepeat'];
+ const raw=structuredClone((await state()).state);
+ delete raw.scenarios.pilot.values.monthlyCommissionMonths;
+ raw.scenarios.pilot.values.monthlyRepeat=10;
+ await db.query('UPDATE caldock_studio_state SET state=$1 WHERE id=1',[JSON.stringify(raw)]);
+ const initial=await state();assert.deepEqual(initial.state,raw);
+ const queuedTerm=change(initial,term,0);assert.equal(queuedTerm.before,null);
+ const rate=await send('editor','PATCH','/state',change(initial,repeat,20));assert.equal(rate.statusCode,200,rate.body);
+ assert.equal(Object.hasOwn(rate.json().state.scenarios.pilot.values,'monthlyCommissionMonths'),false);
+ const unrelated=await send('editor','PATCH','/state',change(initial,annual,141));assert.equal(unrelated.statusCode,200,unrelated.body);
+ assert.equal(Object.hasOwn(unrelated.json().state.scenarios.pilot.values,'monthlyCommissionMonths'),false);
+ const applied=await send('editor','PATCH','/state',queuedTerm);assert.equal(applied.statusCode,200,applied.body);
+ assert.equal(applied.json().state.scenarios.pilot.values.monthlyCommissionMonths,0);
+ const prior=await state(),staleTerm=change(prior,term,3);
+ const concurrent=await send('owner','PATCH','/state',change(prior,term,12));assert.equal(concurrent.statusCode,200,concurrent.body);
+ assert.equal((await send('editor','PATCH','/state',staleTerm)).statusCode,409);
+ const latest=await state(),restored=await send('editor','POST','/history/'+queuedTerm.requestId+'/restore',{revision:latest.revision,requestId:randomUUID()});
+ assert.equal(restored.statusCode,200,restored.body);
+ assert.equal(Object.hasOwn(restored.json().state.scenarios.pilot.values,'monthlyCommissionMonths'),false);
+ assert.equal(restored.json().state.scenarios.pilot.values.monthlyRepeat,20);
+ assert.equal(restored.json().state.scenarios.pilot.values.annual,141);
 });
 test('real SSE sends initial state and a committed edit from another instance',async()=>{
  await other.listen({host:'127.0.0.1',port:0});const address=other.server.address() as {port:number};

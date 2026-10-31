@@ -46,8 +46,10 @@ AND caldock_studio_state.state='${JSON.stringify(legacyStudioSeed).replaceAll("'
 const bilingual=z.object({zh:z.string().max(30000),en:z.string().max(30000)}).strict();
 const id=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/).refine(v=>!['__proto__','prototype','constructor'].includes(v));
 const record=<T extends z.ZodType>(type:T,max:number)=>z.record(id,type).refine(o=>Object.keys(o).length<=max);
+// The calculator treats a missing legacy term as six months. Preserve absence
+// here so an unrelated write does not change queued field preconditions.
 const numbers=z.object(Object.fromEntries(Object.entries(studioRanges).map(([k,[min,max]])=>[k,k==='monthlyCommissionMonths'
- ?z.number().finite().int().min(min).max(max).optional().default(6)
+ ?z.number().finite().int().min(min).max(max).optional()
  :z.number().finite().min(min).max(max)]))).strict();
 const scenario=z.object({name:bilingual,values:numbers}).strict();
 const task=z.object({title:bilingual,owner:z.string().max(200),due:z.string().refine(v=>v===''||/^\d{4}-\d{2}-\d{2}$/.test(v)),done:z.boolean()}).strict();
