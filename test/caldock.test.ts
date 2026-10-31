@@ -8,6 +8,7 @@ import {issueSession} from '../src/auth.js';
 import {verifyCaldockIdentity,type CaldockGateway,type CaldockProvider} from '../src/caldock-oidc.js';
 import {caldockOptionsFromEnv} from '../src/caldock.js';
 import {recordVerifiedCaldockPayment} from '../src/caldock-domain.js';
+import {caldockSchema} from '../src/caldock-schema.js';
 
 let db:Database,dbAdmin:Database|undefined,isolated:string|undefined,app:Awaited<ReturnType<typeof buildApp>>;
 const origin='https://craftos.example.test',adminId=randomUUID();
@@ -28,18 +29,18 @@ before(async()=>{
 after(async()=>{if(app)await app.close();else if(db)await db.close();if(dbAdmin&&isolated){await dbAdmin.exec(`DROP SCHEMA ${isolated} CASCADE`);await dbAdmin.close();}});
 const send=(who:Login,method:'GET'|'POST'|'PATCH'|'DELETE',url:string,payload?:Record<string,unknown>,headers:Record<string,string>={})=>app.inject({method,url:'/caldock'+url,payload,headers:{cookie:who.cookie,origin,'x-csrf-token':who.csrf,...headers}});
 function cookies(response:any){return [response.headers['set-cookie']].flat().filter(Boolean).map(String);}
-async function login(code:string,provider:CaldockProvider='google',ref?:string):Promise<Login>{
- const start=await app.inject(`/caldock/auth/${provider}/start?next=account&lang=zh&interval=year${ref?'&ref='+ref:''}`);assert.equal(start.statusCode,302,start.body);
+async function login(code:string,provider:CaldockProvider='google',ref?:string,billing:'month'|'quarter'|'year'='year'):Promise<Login>{
+ const start=await app.inject(`/caldock/auth/${provider}/start?next=account&lang=zh&interval=${billing}${ref?'&ref='+ref:''}`);assert.equal(start.statusCode,302,start.body);
  const state=new URL(start.headers.location!).searchParams.get('state')!;
  const cookie=cookies(start).map(c=>c.split(';')[0]).join('; ');
  const callback=await app.inject({method:provider==='apple'?'POST':'GET',url:`/caldock/auth/${provider}/callback${provider==='google'?'?state='+state+'&code='+code:''}`,payload:provider==='apple'?new URLSearchParams({state,code}).toString():undefined,headers:{cookie,...(provider==='apple'?{'content-type':'application/x-www-form-urlencoded'}:{})}});
- assert.equal(callback.statusCode,302,callback.body);assert.match(String(callback.headers.location),/^https:\/\/craftos\.example\.test\/caldock\/\?/);assert.doesNotMatch(String(callback.headers.location),/access_token|csrf|secret/);
+ assert.equal(callback.statusCode,302,callback.body);assert.equal(new URL(String(callback.headers.location)).searchParams.get('interval'),billing);assert.match(String(callback.headers.location),/^https:\/\/craftos\.example\.test\/caldock\/\?/);assert.doesNotMatch(String(callback.headers.location),/access_token|csrf|secret/);
  const session=cookies(callback).find(c=>c.startsWith('__Host-caldock_session='));assert.ok(session);assert.match(session,/HttpOnly; SameSite=Lax/);assert.match(session,/; Secure/);
  const me=await app.inject({url:'/caldock/me',headers:{cookie:session.split(';')[0]}});assert.equal(me.statusCode,200,me.body);
  return {cookie:session.split(';')[0],csrf:me.json().csrfToken,...me.json()};
 }
 test('capabilities report server prices and no live payment; missing providers fail closed',async()=>{
- const cap=(await app.inject('/caldock/capabilities')).json();assert.equal(cap.prices.month,19900);assert.equal(cap.prices.year,179900);assert.equal(cap.payments,false);assert.equal(cap.referrals.automaticPayouts,false);
+ const cap=(await app.inject('/caldock/capabilities')).json();assert.equal(cap.prices.month,19900);assert.equal(cap.prices.quarter,50700);assert.equal(cap.prices.year,154800);assert.equal(cap.payments,false);assert.equal(cap.referrals.automaticPayouts,false);
  const empty=await buildApp({db,environment:'production',closeDatabase:false,caldock:{publicUrl:origin}});
  try{assert.equal((await empty.inject('/caldock/auth/google/start')).statusCode,503);assert.equal((await empty.inject('/caldock/me')).statusCode,401);assert.equal((await empty.inject('/caldock/admin/orders')).statusCode,401);}finally{await empty.close();}
  const config=caldockOptionsFromEnv({NODE_ENV:'production',CALDOCK_GOOGLE_CLIENT_ID:'incomplete'});assert.equal(config.providers?.google,undefined);assert.deepEqual(config.adminUserIds,[]);
@@ -86,7 +87,7 @@ test('server owns order prices and customer identity; retries return one order',
  const key=randomUUID();const payload={interval:'year',requestKey:key};
  assert.equal((await send(buyer,'POST','/orders',{...payload,amountCents:1})).statusCode,400);
  assert.equal((await send(buyer,'POST','/orders',{...payload,customerId:owner.user.id})).statusCode,400);
- const created=await send(buyer,'POST','/orders',payload);assert.equal(created.statusCode,201,created.body);const row=created.json();assert.equal(row.amount_cents,179900);assert.equal(row.customer_id,buyer.user.id);assert.equal(row.status,'pending_payment');
+ const created=await send(buyer,'POST','/orders',payload);assert.equal(created.statusCode,201,created.body);const row=created.json();assert.equal(row.amount_cents,154800);assert.equal(row.customer_id,buyer.user.id);assert.equal(row.status,'pending_payment');
  const retry=await send(buyer,'POST','/orders',payload);assert.equal(retry.json().id,row.id);
  assert.equal((await send(buyer,'POST','/orders',{interval:'month',requestKey:key})).statusCode,409);
  assert.equal((await send(buyer,'POST','/orders',{interval:'month',requestKey:randomUUID()})).statusCode,409);
@@ -131,6 +132,30 @@ test('manual commission recording requires approval and reference; refund voids 
  await recordVerifiedCaldockPayment(db,{eventId:'verified_refund_1',orderId:order.id,type:'refunded',amountCents:19900,currency:'USD'});
  const data=(await send(affiliate,'GET','/affiliate')).json();assert.equal(data.commissions[0].status,'void');assert.ok(data.commissions[0].settled_at);assert.equal(data.stats.pendingCents,0);assert.equal(data.stats.settledCents,0);
  assert.ok((await db.query('SELECT * FROM caldock_audit WHERE object_id=$1',[commission.id])).rows.length>=2);
+});
+test('billing migration is repeatable and leaves legacy order snapshots unchanged',async()=>{
+ const legacy=await login('legacy-order-customer');
+ const row=(await send(legacy,'POST','/orders',{interval:'year',requestKey:randomUUID()})).json();
+ await db.query('UPDATE caldock_orders SET amount_cents=179900 WHERE id=$1',[row.id]);
+ await db.exec("ALTER TABLE caldock_orders DROP CONSTRAINT caldock_orders_interval_check; ALTER TABLE caldock_orders ADD CONSTRAINT caldock_orders_interval_check CHECK(interval IN ('month','year'))");
+ await db.exec(caldockSchema);await db.exec(caldockSchema);
+ assert.equal((await send(legacy,'GET','/orders/'+row.id)).json().amount_cents,179900);
+ assert.match((await db.query("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='caldock_orders'::regclass AND conname='caldock_orders_interval_check'")).rows[0].definition,/quarter/);
+});
+test('quarterly login, authoritative upfront price, referral commission and three-month delivery agree',async()=>{
+ const code=(await send(affiliate,'GET','/affiliate')).json().affiliate.code;
+ const customer=await login('quarterly-customer','google',code,'quarter');
+ const key=randomUUID();
+ assert.equal((await send(customer,'POST','/orders',{interval:'quarter',requestKey:key,amountCents:16900})).statusCode,400);
+ const created=await send(customer,'POST','/orders',{interval:'quarter',requestKey:key});assert.equal(created.statusCode,201,created.body);
+ const row=created.json();assert.equal(row.amount_cents,50700);assert.equal(row.interval,'quarter');
+ assert.equal((await send(customer,'POST','/orders',{interval:'quarter',requestKey:key})).json().id,row.id);
+ await recordVerifiedCaldockPayment(db,{eventId:'quarterly-verified-paid',orderId:row.id,type:'paid',amountCents:50700,currency:'USD'});
+ const ledger=(await db.query('SELECT amount_cents FROM caldock_commissions WHERE order_id=$1',[row.id])).rows[0];assert.equal(ledger.amount_cents,10140);
+ const paid=(await send(customer,'GET','/orders/'+row.id)).json();
+ const provisioning=(await send(owner,'PATCH','/admin/orders/'+row.id,{status:'provisioning',expectedVersion:paid.version})).json();
+ const delivered=await send(owner,'PATCH','/admin/orders/'+row.id,{status:'active',expectedVersion:provisioning.version});assert.equal(delivered.statusCode,200,delivered.body);
+ assert.equal((await db.query("SELECT billing_ends_at=delivered_at+interval '3 months' AS correct_term FROM caldock_orders WHERE id=$1",[row.id])).rows[0].correct_term,true);
 });
 test('logout revokes the server session and clears the cookie',async()=>{
  assert.equal((await send(other,'DELETE','/session')).statusCode,200);assert.equal((await send(other,'GET','/me')).statusCode,401);

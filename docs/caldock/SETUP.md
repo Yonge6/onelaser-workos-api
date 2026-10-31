@@ -39,7 +39,8 @@ The first user is never an administrator. Matching email addresses do not auto-l
 
 ## Orders and commission rules
 
-- The server determines USD 199/month or USD 1,799/year in integer cents. Clients cannot supply prices, customer IDs or paid status.
+- The server determines USD 199/month, USD 507/quarter (169/month), or USD 1,548/year (129/month) in integer cents. Clients cannot supply prices, customer IDs or paid status.
+- Pricing changes apply to new orders only. Existing orders retain their snapshotted amount and commission rule. Quarterly delivery starts a three-calendar-month service period.
 - Order creation is idempotent per customer/request key and respects one open rental per customer.
 - A new customer's initial referral is bound from a server-side 30-day first-touch record. Existing customers cannot overwrite attribution; self-referrals cannot earn commission.
 - Commission defaults to zero and first paid order. Administrators can set 0–100% and first/every paid order. Each order snapshots the rule, so future edits do not retroactively change it.
