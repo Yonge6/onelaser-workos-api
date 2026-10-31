@@ -9,6 +9,14 @@ import {hash, readCookie, sameSecret} from './auth.js';
 import {deny} from './errors.js';
 import {studioSeed, studioRanges} from './caldock-studio-seed.js';
 
+// Correct only the untouched original default document. A changed field or a
+// nonzero revision makes this a user plan, which this seed migration preserves.
+const legacyStudioSeed=structuredClone(studioSeed);
+for(const {values} of Object.values(legacyStudioSeed.scenarios)){
+ Object.assign(values,{purchase:899,monthlyFirst:20,monthlyRepeat:10,quarterCommission:8,annualCommission:8});
+ delete (values as Partial<typeof values>).monthlyCommissionMonths;
+}
+
 // Public viewing was explicitly requested; writes always require a CalDock
 // session AND studio membership. Commerce admin alone cannot edit a plan.
 export const studioSchema=`
@@ -31,11 +39,16 @@ CREATE TABLE IF NOT EXISTS caldock_studio_access_audit (
  member_id text NOT NULL REFERENCES caldock_users(id), before_role text, after_role text,
  created_at timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO caldock_studio_state(id,state) VALUES(1,'${JSON.stringify(studioSeed).replaceAll("'","''")}'::jsonb) ON CONFLICT DO NOTHING;`;
+INSERT INTO caldock_studio_state(id,state) VALUES(1,'${JSON.stringify(studioSeed).replaceAll("'","''")}'::jsonb)
+ON CONFLICT(id) DO UPDATE SET state=EXCLUDED.state, updated_at=now()
+WHERE caldock_studio_state.revision=0
+AND caldock_studio_state.state='${JSON.stringify(legacyStudioSeed).replaceAll("'","''")}'::jsonb;`;
 const bilingual=z.object({zh:z.string().max(30000),en:z.string().max(30000)}).strict();
 const id=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/).refine(v=>!['__proto__','prototype','constructor'].includes(v));
 const record=<T extends z.ZodType>(type:T,max:number)=>z.record(id,type).refine(o=>Object.keys(o).length<=max);
-const numbers=z.object(Object.fromEntries(Object.entries(studioRanges).map(([k,[min,max]])=>[k,z.number().finite().min(min).max(max)]))).strict();
+const numbers=z.object(Object.fromEntries(Object.entries(studioRanges).map(([k,[min,max]])=>[k,k==='monthlyCommissionMonths'
+ ?z.number().finite().int().min(min).max(max).optional().default(6)
+ :z.number().finite().min(min).max(max)]))).strict();
 const scenario=z.object({name:bilingual,values:numbers}).strict();
 const task=z.object({title:bilingual,owner:z.string().max(200),due:z.string().refine(v=>v===''||/^\d{4}-\d{2}-\d{2}$/.test(v)),done:z.boolean()}).strict();
 const nonnegative=z.number().finite().min(0).max(1000000);
