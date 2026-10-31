@@ -165,6 +165,8 @@ CREATE TABLE IF NOT EXISTS bot_oauth_requests (
  code_challenge text NOT NULL, nonce_hash text NOT NULL, policy_hash text NOT NULL, expires_at timestamptz NOT NULL, consumed_at timestamptz
 );
 ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_request_id text;
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_destination text CHECK(return_destination IS NULL OR return_destination='caldock-studio');
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_language text CHECK(return_language IS NULL OR return_language IN ('zh','en'));
 CREATE TABLE IF NOT EXISTS bot_oauth_grants (
  id text PRIMARY KEY, org_id text NOT NULL, department_id text NOT NULL, manager_id text NOT NULL REFERENCES users(id),
  client_id text NOT NULL REFERENCES bot_oauth_clients(id), redirect_uri text NOT NULL, resource text NOT NULL, scope text NOT NULL, policy_hash text NOT NULL,

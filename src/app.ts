@@ -83,8 +83,8 @@ export async function buildApp(options:AppOptions) {
     req.language=languageFrom(req.headers['accept-language']);
     reply.header('Content-Language',req.language).header('Cache-Control','no-store').header('X-Content-Type-Options','nosniff').header('Referrer-Policy','no-referrer');
     const requestPath=req.url.split('?')[0];
-    // This namespace has its own customer identities, cookies, CSRF and admin checks.
-    // It never accepts a Work OS employee session or bypasses another API namespace.
+    // Commerce has its own customer identities, cookies, CSRF and admin checks.
+    // Studio alone may bridge an independently scoped DingTalk employee session.
     if(requestPath.startsWith('/caldock/')) return;
     if(publicPaths.has(requestPath)||/^\/integrations\/grok-bot\/oauth\/requests\/[A-Za-z0-9_-]{43}$/.test(requestPath)) return;
     const cookieToken=readCookie(req.headers.cookie,sessionCookieName(integrations.secureCookies));
@@ -134,7 +134,11 @@ export async function buildApp(options:AppOptions) {
   app.get('/executive/summary',async req=>{const user=actor(req);if(!isExecutive(user))deny(403,'FORBIDDEN','Executive access is required');return db.transaction(tx=>executiveSummary(tx,user.org_id,integrations.teamMode));});
   registerSupportRoutes(app,db,options.support,integrations.executiveUserIds);
   await registerCaldockRoutes(app,db,{...options.caldock,secureCookies:environment==='production'||options.caldock?.secureCookies===true});
-  await registerCaldockStudio(app,db,{publicUrl:options.caldock?.publicUrl,...options.studio,secureCookies:environment==='production'||options.studio?.secureCookies===true});
+  await registerCaldockStudio(app,db,{publicUrl:options.caldock?.publicUrl||integrations.appPublicUrl,...options.studio,
+    dingtalk:integrations.dingtalk&&integrations.corpId&&integrations.appPublicUrl&&(integrations.allowedDepartmentIds?.length||integrations.teamMode==='company'&&integrations.additionalUserIds?.length)?{
+      corpId:integrations.corpId,allowedDepartmentIds:integrations.allowedDepartmentIds||[],
+      additionalUserIds:integrations.teamMode==='company'?integrations.additionalUserIds||[]:[],managerUserIds:integrations.managerUserIds||[]
+    }:undefined,secureCookies:environment==='production'||options.studio?.secureCookies===true});
   registerPublicWikiRoutes(app,db,options.publicWiki,options.support,integrations.executiveUserIds);
   registerShopifyRoutes(app,db,options.shopify,options.support,integrations.executiveUserIds);
   registerTaskBoardRoutes(app,db);
