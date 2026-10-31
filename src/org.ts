@@ -44,7 +44,7 @@ const profileInput = z.object({
   email: z.union([z.literal(''), z.string().trim().max(200).email()]).optional(),
   wechat: text(60).optional(),
   location: text(80).optional(),
-  timezone: text(60).regex(/^[A-Za-z_]+(\/[A-Za-z0-9_+\-]+)*$|^$/, 'Invalid time zone').optional(),
+  timezone: text(60).refine(value => { if (!value) return true; if (!/^[A-Za-z_]+(\/[A-Za-z0-9_+\-]+)*$/.test(value)) return false; try { new Intl.DateTimeFormat('en', {timeZone:value}); return true; } catch { return false; } }, 'Invalid time zone').optional(),
 }).strict().refine(v => Object.keys(v).length > 0, 'Nothing to change');
 const avatarInput = z.object({ dataUrl: z.string().max(400_000) }).strict();
 const memberPatch = z.object({
@@ -165,13 +165,14 @@ export async function registerOrgRoutes(app: FastifyInstance, db: Database, o: O
     if (!ids.length) return { scope, canViewAll: admin, members: [], totals: null };
     const members = (await db.query(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id=ANY($1::text[]) ORDER BY display_name,id`, [ids])).rows;
     const tasks = (await db.query(`SELECT t.id,t.title,t.owner_id,t.status,t.due_at,t.board_status,
-        (SELECT r.created_at FROM reviews r WHERE r.task_id=t.id AND r.decision='accept' ORDER BY r.created_at DESC LIMIT 1) AS accepted_at,
-        (SELECT r.quality FROM reviews r WHERE r.task_id=t.id AND r.decision='accept' ORDER BY r.created_at DESC LIMIT 1) AS quality
+        (SELECT r.created_at FROM reviews r WHERE r.task_id=t.id AND r.submission_version=t.submission_version AND r.decision='accept' ORDER BY r.created_at DESC,r.id DESC LIMIT 1) AS accepted_at,
+        (SELECT r.quality FROM reviews r WHERE r.task_id=t.id AND r.submission_version=t.submission_version AND r.decision='accept' ORDER BY r.created_at DESC,r.id DESC LIMIT 1) AS quality
       FROM tasks t WHERE t.org_id=$1 AND t.owner_id=ANY($2::text[])`, [user.org_id, ids])).rows;
     const now = Date.now();
     const statsFor = (list: any[]) => {
       const accepted = list.filter(t => t.status === 'accepted'), open = list.filter(t => t.status !== 'accepted');
-      const onTime = accepted.filter(t => t.accepted_at && new Date(t.accepted_at).getTime() <= new Date(t.due_at).getTime()).length;
+      const timed = accepted.filter(t => t.accepted_at && Number.isFinite(new Date(t.accepted_at).getTime()) && Number.isFinite(new Date(t.due_at).getTime()));
+      const onTime = timed.filter(t => new Date(t.accepted_at).getTime() <= new Date(t.due_at).getTime()).length;
       const qualities = accepted.map(t => t.quality).filter((q: any) => typeof q === 'number');
       return {
         total: list.length, accepted: accepted.length, open: open.length,
@@ -180,7 +181,8 @@ export async function registerOrgRoutes(app: FastifyInstance, db: Database, o: O
         overdue: open.filter(t => new Date(t.due_at).getTime() < now).length,
         dueSoon: open.filter(t => { const d = new Date(t.due_at).getTime(); return d >= now && d < now + 7 * 864e5; }).length,
         completionRate: list.length ? Math.round(accepted.length / list.length * 100) : null,
-        onTimeRate: accepted.length ? Math.round(onTime / accepted.length * 100) : null,
+        onTimeRate: timed.length ? Math.round(onTime / timed.length * 100) : null,
+        onTimeKnown: timed.length, onTimeUnknown: accepted.length - timed.length,
         avgQuality: qualities.length ? Math.round(qualities.reduce((s: number, q: number) => s + q, 0) / qualities.length) : null,
       };
     };

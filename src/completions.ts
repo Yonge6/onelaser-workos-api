@@ -6,7 +6,7 @@
  *  - On completion the AI scores the result 0–10 ("完成 9.5/10"). Without an AI score the task is
  *    shown as "awaiting AI score" and does not count as completed in rankings.
  *  - Within 3 days the owner may reopen and resubmit; after 3 days the task moves to Completed and
- *    the completion and its score are locked.
+ *    the completion is locked. An unscored result can still be scored by its owner or reviewer. Successful scores are immutable.
  */
 import { randomUUID, createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS task_completions (
  ai_score numeric(3,1), ai_summary text, ai_model text, scored_at timestamptz,
  completed_by text NOT NULL REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), superseded_at timestamptz
 );
+ALTER TABLE task_completions ADD COLUMN IF NOT EXISTS ai_attempted_at timestamptz;
+ALTER TABLE task_completions ADD COLUMN IF NOT EXISTS ai_attempt_id text;
+ALTER TABLE task_completions ADD COLUMN IF NOT EXISTS ai_attempts integer NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS task_completion_task_idx ON task_completions(task_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS task_attachments (
  id text PRIMARY KEY, org_id text NOT NULL, task_id text NOT NULL REFERENCES tasks(id), uploader_id text NOT NULL REFERENCES users(id),
@@ -51,15 +54,17 @@ const insightInput = z.object({ board: z.enum(['home', 'okr', 'project', 'task',
 /** Minimal JSON-schema chat call against the configured OpenAI-compatible provider (xAI by default). */
 export type JsonModel = { model: string; json: (system: string, user: string, schema: object, name: string) => Promise<any> };
 export function jsonModel(config: { apiKey?: string; model?: string; baseUrl?: string } | undefined, fetcher: typeof fetch = fetch): JsonModel | undefined {
-  if (!config?.apiKey || !config.model) return undefined;
-  const base = new URL(config.baseUrl || 'https://api.x.ai/v1');
-  if (base.protocol !== 'https:' || base.username || base.password) return undefined;
+  const apiKey=config?.apiKey?.trim(), model=config?.model?.trim();
+  if (!apiKey || !model) return undefined;
+  let base:URL;
+  try { base = new URL(config?.baseUrl || 'https://api.x.ai/v1'); } catch { return undefined; }
+  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) return undefined;
   const endpoint = base.toString().replace(/\/$/, '') + '/chat/completions';
   return {
-    model: config.model,
+    model,
     async json(system, user, schema, name) {
-      const r = await fetcher(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30000),
-        body: JSON.stringify({ model: config.model, stream: false, max_tokens: 800, response_format: { type: 'json_schema', json_schema: { name, strict: true, schema } }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }) });
+      const r = await fetcher(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({ model, stream: false, max_tokens: 800, response_format: { type: 'json_schema', json_schema: { name, strict: true, schema } }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }) });
       if (!r.ok) throw new Error('AI_UPSTREAM_FAILED');
       const text = await r.text(); if (text.length > 256 * 1024) throw new Error('AI_UPSTREAM_FAILED');
       const choice = JSON.parse(text).choices?.[0];
@@ -83,19 +88,46 @@ export type CompletionOptions = { model?: JsonModel; fxFetcher?: typeof fetch; f
 const actorOf = (req: FastifyRequest): User => req.actor || deny(401, 'UNAUTHENTICATED', 'Authentication is required');
 
 export async function latestCompletion(db: Queryable, taskId: string) {
-  return (await db.query('SELECT id,result,self_review,attachment_ids,ai_status,ai_score,ai_summary,scored_at,completed_by,created_at FROM task_completions WHERE task_id=$1 AND superseded_at IS NULL ORDER BY created_at DESC LIMIT 1', [taskId])).rows[0] || null;
+  return (await db.query('SELECT id,result,self_review,attachment_ids,ai_status,ai_score,ai_summary,scored_at,completed_by,created_at,ai_attempted_at,ai_attempts FROM task_completions WHERE task_id=$1 AND superseded_at IS NULL ORDER BY created_at DESC LIMIT 1', [taskId])).rows[0] || null;
 }
 
 export async function registerCompletionRoutes(app: FastifyInstance, db: Database, o: CompletionOptions) {
-  const scoring = new Set<string>();
-  async function runScore(completionId: string, task: any, c: { result: string; selfReview: string; attachments: string[] }) {
-    if (!o.model) { await db.query("UPDATE task_completions SET ai_status='unavailable' WHERE id=$1", [completionId]); return; }
-    if (scoring.has(completionId)) return; scoring.add(completionId);
+  const retryRate = new Map<string, number[]>();
+  const canScore = (user:User, task:any) => task.owner_id === user.id || task.reviewer_id === user.id;
+  async function recordAttempt(tx:Queryable, task:any, actorId:string, action:string, details:object) {
+    await tx.query('INSERT INTO audit_events(id,org_id,department_id,owner_id,actor_id,action,object_id,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+      [randomUUID(),task.org_id,task.department_id,task.owner_id,actorId,action,task.id,JSON.stringify(details)]);
+  }
+  async function runScore(completionId:string, task:any, c:{result:string;selfReview:string;attachments:string[]}, actorId:string, retry=false) {
+    if (!o.model) {
+      await db.query("UPDATE task_completions SET ai_status='unavailable' WHERE id=$1 AND ai_status<>'scored' AND superseded_at IS NULL",[completionId]);
+      return false;
+    }
+    // Persistent claim: only one in-flight attempt, recoverable after a crashed process. A stale
+    // provider response must not overwrite a newer attempt or a superseded completion.
+    const attemptId=randomUUID();
+    const claimed=await db.transaction(async tx=>{
+      const r=await tx.query(`UPDATE task_completions SET ai_status='pending',ai_attempted_at=now(),ai_attempt_id=$2,ai_attempts=ai_attempts+1
+        WHERE id=$1 AND superseded_at IS NULL AND ai_status<>'scored'
+        AND (ai_status<>'pending' OR ai_attempted_at IS NULL OR ai_attempted_at<now()-interval '2 minutes') RETURNING id`,[completionId,attemptId]);
+      if(!r.rows.length)return false;
+      await recordAttempt(tx,task,actorId,retry?'task.completion_score_retry':'task.completion_score_started',{completionId,attemptId});
+      return true;
+    });
+    if(!claimed)return false;
     try {
-      const s = await scoreCompletion(o.model, task, c, 'zh');
-      await db.query("UPDATE task_completions SET ai_status='scored',ai_score=$2,ai_summary=$3,ai_model=$4,scored_at=now() WHERE id=$1 AND superseded_at IS NULL", [completionId, s.score, s.summary, o.model.model]);
-    } catch { await db.query("UPDATE task_completions SET ai_status='failed' WHERE id=$1", [completionId]); }
-    finally { scoring.delete(completionId); }
+      const score=await scoreCompletion(o.model,task,c,'zh');
+      await db.transaction(async tx=>{
+        const saved=await tx.query("UPDATE task_completions SET ai_status='scored',ai_score=$2,ai_summary=$3,ai_model=$4,scored_at=now() WHERE id=$1 AND superseded_at IS NULL AND ai_attempt_id=$5 AND ai_status='pending' RETURNING id",[completionId,score.score,score.summary,o.model!.model,attemptId]);
+        if(saved.rows.length)await recordAttempt(tx,task,actorId,'task.completion_scored',{completionId,attemptId,score:score.score});
+      });
+    } catch {
+      await db.transaction(async tx=>{
+        const failed=await tx.query("UPDATE task_completions SET ai_status='failed' WHERE id=$1 AND superseded_at IS NULL AND ai_attempt_id=$2 AND ai_status='pending' RETURNING id",[completionId,attemptId]);
+        if(failed.rows.length)await recordAttempt(tx,task,actorId,'task.completion_score_failed',{completionId,attemptId});
+      });
+    }
+    return true;
   }
 
   app.post<{ Params: { id: string } }>('/tasks/:id/complete', async (req, reply) => {
@@ -105,7 +137,7 @@ export async function registerCompletionRoutes(app: FastifyInstance, db: Databas
       if (!visibleTask(user, task)) deny(404, 'NOT_FOUND', 'Task not found');
       if (task.owner_id !== user.id && task.reviewer_id !== user.id) deny(403, 'FORBIDDEN', 'Only the owner or reviewer can complete this task');
       if (task.version !== input.expectedVersion) deny(409, 'VERSION_CONFLICT', 'Task changed; reload before saving');
-      if (task.board_status === 'done' && task.board_done_at && Date.now() - new Date(task.board_done_at).getTime() >= COMPLETION_LOCK_MS) deny(409, 'COMPLETION_LOCKED', 'This task was completed more than 3 days ago; its result and score are locked');
+      if (task.board_status === 'done' && task.board_done_at && Date.now() - new Date(task.board_done_at).getTime() >= COMPLETION_LOCK_MS) deny(409, 'COMPLETION_LOCKED', 'This task was completed more than 3 days ago; its result is locked');
       const atts = input.attachmentIds.length ? (await tx.query('SELECT id,name FROM task_attachments WHERE task_id=$1 AND id=ANY($2::text[])', [taskId, input.attachmentIds])).rows : [];
       if (atts.length !== input.attachmentIds.length) deny(400, 'INVALID_ATTACHMENT', 'Attach files to this task before referencing them');
       await tx.query('UPDATE task_completions SET superseded_at=now() WHERE task_id=$1 AND superseded_at IS NULL', [taskId]);
@@ -114,7 +146,7 @@ export async function registerCompletionRoutes(app: FastifyInstance, db: Databas
       await tx.query('INSERT INTO audit_events(id,org_id,department_id,owner_id,actor_id,action,object_id,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [randomUUID(), task.org_id, task.department_id, task.owner_id, user.id, 'task.completed', taskId, JSON.stringify({ completionId: completion.id, attachments: atts.length })]);
       return { task: next, completion, names: atts.map((a: any) => a.name) };
     });
-    void runScore(completion.id, task, { result: input.result, selfReview: input.selfReview, attachments: names });
+    void runScore(completion.id, task, { result: input.result, selfReview: input.selfReview, attachments: names }, user.id).catch(()=>{ /* A database interruption is recovered through the pending-attempt lease. */ });
     return reply.code(201).send({ task, completion: { ...completion, ai_status: o.model ? 'pending' : 'unavailable' } });
   });
 
@@ -124,19 +156,27 @@ export async function registerCompletionRoutes(app: FastifyInstance, db: Databas
     if (!visibleTask(user, task)) deny(404, 'NOT_FOUND', 'Task not found');
     const c = await latestCompletion(db, taskId);
     const locked = !!(task.board_status === 'done' && task.board_done_at && Date.now() - new Date(task.board_done_at).getTime() >= COMPLETION_LOCK_MS);
-    return { completion: c, locked, lockAt: task.board_done_at ? new Date(new Date(task.board_done_at).getTime() + COMPLETION_LOCK_MS).toISOString() : null };
+    return { completion: c, locked, canRetryScore: !!o.model && canScore(user,task) && !!c && c.ai_status !== 'scored', lockAt: task.board_done_at ? new Date(new Date(task.board_done_at).getTime() + COMPLETION_LOCK_MS).toISOString() : null };
   });
 
-  app.post<{ Params: { id: string } }>('/tasks/:id/completion/rescore', async req => {
-    const user = actorOf(req), taskId = id.parse(req.params.id);
-    const task = (await db.query('SELECT * FROM tasks WHERE id=$1', [taskId])).rows[0];
-    if (!visibleTask(user, task)) deny(404, 'NOT_FOUND', 'Task not found');
-    if (task.board_done_at && Date.now() - new Date(task.board_done_at).getTime() >= COMPLETION_LOCK_MS) deny(409, 'COMPLETION_LOCKED', 'This task was completed more than 3 days ago; its result and score are locked');
-    const c = await latestCompletion(db, taskId); if (!c) deny(404, 'NOT_FOUND', 'Task not found');
-    if (c.ai_status === 'scored') return { completion: c };
-    const names = c.attachment_ids?.length ? (await db.query('SELECT name FROM task_attachments WHERE id=ANY($1::text[])', [c.attachment_ids])).rows.map((r: any) => r.name) : [];
-    await runScore(c.id, task, { result: c.result, selfReview: c.self_review, attachments: names });
-    return { completion: await latestCompletion(db, taskId) };
+  app.post<{ Params: { id: string } }>('/tasks/:id/completion/rescore', async (req,reply) => {
+    const user=actorOf(req), taskId=id.parse(req.params.id);
+    const v=z.object({completionId:id.optional()}).strict().parse(req.body || {});
+    const task=(await db.query('SELECT * FROM tasks WHERE id=$1',[taskId])).rows[0];
+    if(!visibleTask(user,task))deny(404,'NOT_FOUND','Task not found');
+    if(!canScore(user,task))deny(403,'FORBIDDEN','Only the owner or reviewer can retry this score');
+    const c=await latestCompletion(db,taskId);if(!c)deny(404,'NOT_FOUND','Task not found');
+    if(v.completionId && v.completionId!==c.id)deny(409,'VERSION_CONFLICT','Completion changed; reload before retrying');
+    if(c.ai_status==='scored')return {completion:c};
+    if(!o.model)deny(503,'AI_NOT_CONFIGURED','AI scoring is not configured');
+    if(c.ai_status==='pending' && c.ai_attempted_at && Date.now()-new Date(c.ai_attempted_at).getTime()<120000)return reply.code(202).send({completion:c});
+    const now=Date.now(), recent=(retryRate.get(user.id)||[]).filter(at=>now-at<3600000);
+    if(recent.length>=10)deny(429,'RATE_LIMITED','Too many score retries; try again later');
+    retryRate.set(user.id,[...recent,now]);
+    if(retryRate.size>2000)retryRate.delete(retryRate.keys().next().value!);
+    const names=c.attachment_ids?.length?(await db.query('SELECT name FROM task_attachments WHERE task_id=$1 AND id=ANY($2::text[])',[taskId,c.attachment_ids])).rows.map((r:any)=>r.name):[];
+    await runScore(c.id,task,{result:c.result,selfReview:c.self_review,attachments:names},user.id,true);
+    return {completion:await latestCompletion(db,taskId)};
   });
 
   /* Team leaderboard: aggregated counts only (no task titles), for everyone in the same department. */

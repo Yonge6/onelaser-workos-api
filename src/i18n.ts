@@ -10,6 +10,11 @@ export function languageFrom(header?:string):Language {
   return preferences[0]?.tag as Language || 'zh';
 }
 const zh:Record<string,string>={
+  'This task was completed more than 3 days ago; its result is locked':'此任务完成已满 3 天，成果内容已锁定；未成功的评分仍可重试。',
+  'AI scoring is not configured':'AI 评分尚未配置，请由管理员完成模型设置后重试。',
+  'Only the owner or reviewer can retry this score':'只有任务负责人或验收人可以重试评分。',
+  'Completion changed; reload before retrying':'成果版本已变化，请刷新后再重试。',
+  'Too many score retries; try again later':'评分重试次数过多，请稍后再试。',
   'Upload a JPEG, PNG or WebP image':'请上传 JPEG、PNG 或 WebP 格式的图片。',
   'The image is too large':'图片太大，请换一张小一点的图片。',
   'Avatar not found':'未找到头像。',

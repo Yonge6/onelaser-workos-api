@@ -61,6 +61,7 @@ export async function buildApp(options:AppOptions) {
   const aiReviewConfigured=()=>{const integrations:any=(options as any).integrations||{};return !!(integrations.aiReviewMode==='bot'?integrations.bot:integrations.ai);};
   const aiAssessmentRequired=()=>process.env.REQUIRE_AI_ASSESSMENT!=='false'&&aiReviewConfigured();
   const {db}=options, environment=options.environment || 'development';
+  const completionModel=options.completionModel===undefined?jsonModel({apiKey:process.env.AI_PROVIDER_API_KEY||process.env.XAI_API_KEY,model:process.env.AI_SCORING_MODEL_ID||process.env.AI_MODEL_ID,baseUrl:process.env.AI_PROVIDER_BASE_URL}):options.completionModel||undefined;
   const devEnabled=options.allowDevLogin===true && environment!=='production';
   if(devEnabled && (options.devLoginSecret?.length || 0)<32) throw new Error('DEV_LOGIN_SECRET must contain at least 32 characters when development login is enabled');
   const app=Fastify({logger:false,bodyLimit:128*1024,trustProxy:false});
@@ -113,7 +114,7 @@ export async function buildApp(options:AppOptions) {
     catch { return reply.code(503).send({status:'unavailable',service:'onelaser-workos-api'}); }
     return {status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false};
   });
-  app.get('/capabilities',async()=>({taskCompletion:true,aiCompletionScore:!!(options.completionModel===undefined?(process.env.AI_PROVIDER_API_KEY||process.env.XAI_API_KEY):options.completionModel),aiInsights:!!(options.completionModel===undefined?(process.env.AI_PROVIDER_API_KEY||process.env.XAI_API_KEY):options.completionModel),liveFx:true,aiAssessmentRequired:aiAssessmentRequired(),tasks:true,objectives:true,okrCollaboration:true,orgProfiles:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?(integrations.bot&&(!(integrations.botMcpAuthMode==='oauth')||!!(integrations.botOAuth?.publicUrl&&integrations.botOAuth.orgId&&integrations.botOAuth.redirectUris.length))):integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',botMcpAuthMode:integrations.botMcpAuthMode||'bearer',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
+  app.get('/capabilities',async()=>({taskCompletion:true,aiCompletionScore:!!completionModel,aiInsights:!!completionModel,liveFx:true,aiAssessmentRequired:aiAssessmentRequired(),tasks:true,objectives:true,okrCollaboration:true,orgProfiles:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?(integrations.bot&&(!(integrations.botMcpAuthMode==='oauth')||!!(integrations.botOAuth?.publicUrl&&integrations.botOAuth.orgId&&integrations.botOAuth.redirectUris.length))):integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',botMcpAuthMode:integrations.botMcpAuthMode||'bearer',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
   const attempts=new Map<string,{count:number;until:number}>();
   app.post('/auth/dev-login',async(req,reply)=>{
     if(!devEnabled) deny(404,'DEV_LOGIN_DISABLED','Development login is disabled');
@@ -139,7 +140,7 @@ export async function buildApp(options:AppOptions) {
   registerTaskBoardRoutes(app,db);
   app.get('/tasks',async req=>{
     const user=actor(req),[where,params]=scope(user);
-    return {items:(await db.query(`SELECT tasks.*,(SELECT json_build_object('ai_status',c.ai_status,'ai_score',c.ai_score) FROM task_completions c WHERE c.task_id=tasks.id AND c.superseded_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS completion FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};
+    return {items:(await db.query(`SELECT tasks.*,CASE WHEN tasks.status='accepted' THEN (SELECT r.created_at FROM reviews r WHERE r.task_id=tasks.id AND r.submission_version=tasks.submission_version AND r.decision='accept' ORDER BY r.created_at DESC,r.id DESC LIMIT 1) ELSE NULL END AS accepted_at,(SELECT json_build_object('ai_status',c.ai_status,'ai_score',c.ai_score) FROM task_completions c WHERE c.task_id=tasks.id AND c.superseded_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS completion FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};
   });
   app.get<{Params:{id:string}}>('/tasks/:id',async req=>taskDetail(db,await loadTask(db,actor(req),identifier.parse(req.params.id))));
   app.post('/tasks',async(req,reply)=>{
@@ -218,7 +219,6 @@ export async function buildApp(options:AppOptions) {
   await registerOkrRoutes(app,db);
   await registerOkrCollabRoutes(app,db);
   await registerOrgRoutes(app,db,{executiveUserIds:integrations.executiveUserIds||[]});
-  const completionModel=options.completionModel===undefined?jsonModel({apiKey:process.env.AI_PROVIDER_API_KEY||process.env.XAI_API_KEY,model:process.env.AI_SCORING_MODEL_ID||process.env.AI_MODEL_ID,baseUrl:process.env.AI_PROVIDER_BASE_URL}):options.completionModel||undefined;
   await registerCompletionRoutes(app,db,{model:completionModel,fxFetcher:options.fxFetcher,fxFallback:Number(process.env.FX_FALLBACK_CNY)||7.1});
   await registerIntegrationRoutes(app,db,integrations);
   if(options.closeDatabase!==false) app.addHook('onClose',async()=>db.close());
