@@ -1,4 +1,5 @@
 import { objectivePlanning, krPlanning } from '../okr.js';
+import { PUBLIC_USER_COLUMNS } from '../org.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -44,7 +45,7 @@ async function upsertMember(tx:Queryable,corpId:string,profile:DingTalkProfile,o
   await tx.query('INSERT INTO departments(org_id,id,external_id,name) VALUES($1,$2,$3,$4) ON CONFLICT(org_id,id) DO UPDATE SET name=excluded.name',[corpId,departmentId,options.teamMode==='company'?'company':profile.departmentId,departmentName]);
   const existing=(await tx.query('SELECT user_id FROM external_identities WHERE provider=$1 AND corp_id=$2 AND external_user_id=$3',['dingtalk',corpId,profile.externalUserId])).rows[0];
   const userId=existing?.user_id||randomUUID();
-  if(existing)await tx.query('UPDATE users SET display_name=$2,department_id=$3,role=$4,active=true WHERE id=$1 AND org_id=$5',[userId,profile.name,departmentId,profile.role,corpId]);
+  if(existing)await tx.query('UPDATE users SET display_name=$2,department_id=$3,role=COALESCE(role_override,$4),active=true WHERE id=$1 AND org_id=$5',[userId,profile.name,departmentId,profile.role,corpId]);
   else{
     await tx.query('INSERT INTO users(id,org_id,department_id,display_name,role) VALUES($1,$2,$3,$4,$5)',[userId,corpId,departmentId,profile.name,profile.role]);
     await tx.query('INSERT INTO external_identities(provider,corp_id,external_user_id,union_id,user_id) VALUES($1,$2,$3,$4,$5)',['dingtalk',corpId,profile.externalUserId,profile.unionId,userId]);
@@ -130,7 +131,7 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
     return reply.redirect(target);
   };
   app.get('/auth/dingtalk/callback',callback);app.post('/auth/dingtalk/callback',callback);
-  app.get('/directory',async req=>{const user=currentUser(req);return {items:(await db.query('SELECT id,display_name,department_id,role FROM users WHERE org_id=$1 AND department_id=$2 AND active=true ORDER BY display_name,id',[user.org_id,user.department_id])).rows};});
+  app.get('/directory',async req=>{const user=currentUser(req);return {items:(await db.query(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE org_id=$1 AND department_id=$2 AND active=true ORDER BY display_name,id`,[user.org_id,user.department_id])).rows};});
   app.get('/departments',async req=>{const user=currentUser(req);return {items:(await db.query('SELECT id,name FROM departments WHERE org_id=$1 AND id=$2',[user.org_id,user.department_id])).rows};});
   app.post('/integrations/dingtalk/sync',async req=>{
     const user=currentUser(req);if(user.role!=='manager')deny(403,'FORBIDDEN','A designated manager must review evidence');

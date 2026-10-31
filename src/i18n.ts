@@ -10,6 +10,15 @@ export function languageFrom(header?:string):Language {
   return preferences[0]?.tag as Language || 'zh';
 }
 const zh:Record<string,string>={
+  'Upload a JPEG, PNG or WebP image':'请上传 JPEG、PNG 或 WebP 格式的图片。',
+  'The image is too large':'图片太大，请换一张小一点的图片。',
+  'Avatar not found':'未找到头像。',
+  'Administrator access is required':'需要管理员权限。',
+  'Cost details require product area access':'查看成本明细前，需要先开通产品管理区权限。',
+  'Member not found':'未找到该成员。',
+  'Select an active member as manager':'请选择在职成员作为直属上级。',
+  'A person cannot report to themselves or their own reports':'不能把上级设为本人或本人的下属。',
+  'You cannot remove your own administrator access':'不能取消自己的管理员权限，请由其他管理员操作。',
   'Objective not found':'未找到该目标。',
   'Only the owner or a department manager can edit this objective':'只有目标负责人或部门负责人可以修改此目标。',
   'Only the owner or a department manager can edit this key result':'只有目标负责人或部门负责人可以修改此关键结果。',
