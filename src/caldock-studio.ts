@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS caldock_studio_access_audit (
  id text PRIMARY KEY, actor_id text NOT NULL REFERENCES caldock_users(id),
  member_id text NOT NULL REFERENCES caldock_users(id), before_role text, after_role text,
  created_at timestamptz NOT NULL DEFAULT now()
-);`;
+);
+INSERT INTO caldock_studio_state(id,state) VALUES(1,'${JSON.stringify(studioSeed).replaceAll("'","''")}'::jsonb) ON CONFLICT DO NOTHING;`;
 const bilingual=z.object({zh:z.string().max(30000),en:z.string().max(30000)}).strict();
 const id=z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/).refine(v=>!['__proto__','prototype','constructor'].includes(v));
 const record=<T extends z.ZodType>(type:T,max:number)=>z.record(id,type).refine(o=>Object.keys(o).length<=max);
@@ -53,7 +54,6 @@ const overlap=(a:string[],b:string[])=>a.slice(0,Math.min(a.length,b.length)).ev
 export type StudioOptions={publicUrl?:string;secureCookies?:boolean;connectionString?:string;ownerUserIds?:string[];heartbeatMs?:number};
 export async function registerCaldockStudio(app:FastifyInstance,db:Database,options:StudioOptions={}){
  const origin=new URL(options.publicUrl||'http://localhost:4173').origin,secure=options.secureCookies===true;
- await db.query('INSERT INTO caldock_studio_state(id,state) VALUES(1,$1) ON CONFLICT DO NOTHING',[JSON.stringify(studioSeed)]);
  // Explicit private deployment configuration only; never first-visitor ownership.
  for(const userId of options.ownerUserIds||[])await db.query("INSERT INTO caldock_studio_members(user_id,role) SELECT id,'owner' FROM caldock_users WHERE id=$1 ON CONFLICT DO NOTHING",[userId]);
  const bus=localBus(db),streams=new Set<()=>void>();
