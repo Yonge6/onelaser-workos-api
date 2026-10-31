@@ -14,3 +14,5 @@ Database changes add only `ai_attempted_at`, `ai_attempt_id` and `ai_attempts` t
 The frontend pin in `deploy/frontend-revision.txt` includes responsive task titles, honest model states, a read-only completion/retry card, prototype assignment isolation and reporting regressions.
 
 Validation: full API and frontend regression suites, new recovery/concurrency/authorization/configuration tests, typecheck/build, pinned Wiki preservation tests, and local browser checks with synthetic data. Real model calls and notification delivery require their existing provider setup and are not claimed by these synthetic tests.
+
+Final browser follow-up: unknown percentage rings expose “Progress unknown” / “进度未知” to assistive technology instead of the drawing fallback 0%. A rendered DOM regression covers all three unknown rings.
