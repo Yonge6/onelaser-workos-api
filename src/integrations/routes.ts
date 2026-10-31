@@ -46,16 +46,15 @@ async function upsertMember(tx:Queryable,corpId:string,profile:DingTalkProfile,o
   const existing=(await tx.query('SELECT user_id FROM external_identities WHERE provider=$1 AND corp_id=$2 AND external_user_id=$3',['dingtalk',corpId,profile.externalUserId])).rows[0];
   const userId=existing?.user_id||randomUUID();
   if(existing)await tx.query('UPDATE users SET display_name=$2,department_id=$3,role=COALESCE(role_override,$4),active=true WHERE id=$1 AND org_id=$5',[userId,profile.name,departmentId,profile.role,corpId]);
-  // DingTalk 职位/办公地点 fill the profile by default; a value someone edited in WorkOS is kept until DingTalk changes again.
+  else{
+    await tx.query('INSERT INTO users(id,org_id,department_id,display_name,role) VALUES($1,$2,$3,$4,$5)',[userId,corpId,departmentId,profile.name,profile.role]);
+    await tx.query('INSERT INTO external_identities(provider,corp_id,external_user_id,union_id,user_id) VALUES($1,$2,$3,$4,$5)',['dingtalk',corpId,profile.externalUserId,profile.unionId,userId]);
+  }
+  // DingTalk 职位/办公地点 fill the profile by default and follow DingTalk changes; a value someone edited in WorkOS is kept.
   if(profile.title!==undefined||profile.workPlace!==undefined)await tx.query(`UPDATE users SET
     title=CASE WHEN $2<>'' AND (title='' OR title=dingtalk_title) THEN $2 ELSE title END, dingtalk_title=CASE WHEN $2<>'' THEN $2 ELSE dingtalk_title END,
     location=CASE WHEN $3<>'' AND (location='' OR location=dingtalk_location) THEN $3 ELSE location END, dingtalk_location=CASE WHEN $3<>'' THEN $3 ELSE dingtalk_location END
     WHERE id=$1`,[userId,profile.title||'',profile.workPlace||'']);
-  else{
-    await tx.query('INSERT INTO users(id,org_id,department_id,display_name,role) VALUES($1,$2,$3,$4,$5)',[userId,corpId,departmentId,profile.name,profile.role]);
-    await tx.query('INSERT INTO external_identities(provider,corp_id,external_user_id,union_id,user_id) VALUES($1,$2,$3,$4,$5)',['dingtalk',corpId,profile.externalUserId,profile.unionId,userId]);
-    if(profile.title||profile.workPlace)await tx.query('UPDATE users SET title=$2,dingtalk_title=$2,location=$3,dingtalk_location=$3 WHERE id=$1',[userId,profile.title||'',profile.workPlace||'']);
-  }
   await tx.query('UPDATE external_identities SET union_id=$4,external_department_id=$5,external_department_name=$6 WHERE provider=$1 AND corp_id=$2 AND external_user_id=$3',['dingtalk',corpId,profile.externalUserId,profile.unionId,profile.departmentId,profile.departmentName]);
   return (await tx.query<User>('SELECT * FROM users WHERE id=$1',[userId])).rows[0];
 }

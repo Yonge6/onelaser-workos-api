@@ -158,3 +158,19 @@ test('Additional member environment configuration is company-only and does not i
   const options=integrationOptionsFromEnv({...base,WORKOS_TEAM_MODE:'company'});
   assert.deepEqual(options.additionalUserIds,['extra-1','extra-2']);assert.deepEqual(options.allowedDepartmentIds,['123']);assert.deepEqual(options.executiveUserIds,[]);
 });
+
+test('DingTalk title and work place fill the profile by default, follow DingTalk changes, and never overwrite a WorkOS edit',async()=>{
+  let title='Engineer',workPlace='东莞';
+  const person={...employeeProfile,externalUserId:'employee-title',unionId:'union-title',departmentId:'123',departmentName:'First department'};
+  const gateway={...ding,async authenticate(){return {...person,title,workPlace};}};
+  const app2=await buildApp({db,environment:'production',closeDatabase:false,integrations:{dingtalk:gateway,corpId:'corp-title',appPublicUrl:origin,teamMode:'company',allowedDepartmentIds:['123'],teamName:'OneLaser'}});
+  const login=async()=>{const start=await app2.inject('/auth/dingtalk/start'),state=new URL(start.headers.location!).searchParams.get('state')!,nonce=String(start.headers['set-cookie']).split(';')[0];const r=await app2.inject({url:`/auth/dingtalk/callback?state=${state}&authCode=x`,headers:{cookie:nonce}});assert.equal(r.statusCode,302,r.body);};
+  const row=async()=>(await db.query("SELECT u.title,u.location FROM users u JOIN external_identities e ON e.user_id=u.id WHERE e.corp_id='corp-title' AND e.external_user_id='employee-title'")).rows[0];
+  try{
+    await login();assert.deepEqual(await row(),{title:'Engineer',location:'东莞'},'new member gets the DingTalk title and work place');
+    await login();assert.deepEqual(await row(),{title:'Engineer',location:'东莞'},'existing member logs in again without errors');
+    title='Senior Engineer';await login();assert.equal((await row()).title,'Senior Engineer','follows DingTalk changes');
+    await db.query("UPDATE users SET title='Product Lead' WHERE id=(SELECT user_id FROM external_identities WHERE corp_id='corp-title' AND external_user_id='employee-title')");
+    title='Staff Engineer';await login();assert.equal((await row()).title,'Product Lead','a WorkOS edit is kept');
+  }finally{await app2.close();}
+});

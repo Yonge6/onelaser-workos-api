@@ -72,7 +72,7 @@ export class DingTalkClient {
     const department=await this.enterprise('/topapi/v2/department/get',{dept_id:Number(departmentId),language:'zh_CN'});
     if (typeof department.result?.name !== 'string' || String(department.result.dept_id)!==departmentId || typeof member.name !== 'string' || !member.name) throw new DingTalkError('DINGTALK_INVALID_RESPONSE',502);
     const clip=(v:unknown,n:number)=>typeof v==='string'?v.trim().slice(0,n):'';
-    return {externalUserId,unionId:member.unionid,name:member.name,departmentId,departmentName:department.result.name,role:this.managers.has(externalUserId)?'manager':'employee',title:clip(member.title,80),workPlace:clip(member.work_place,80)};
+    return {externalUserId,unionId:member.unionid,name:member.name,departmentId,departmentName:department.result.name,role:this.managers.has(externalUserId)?'manager':'employee',...(clip(member.title,80)?{title:clip(member.title,80)}:{}),...(clip(member.work_place,80)?{workPlace:clip(member.work_place,80)}:{})};
   }
   async authenticate(authCode: string): Promise<DingTalkProfile> {
     if (typeof authCode !== 'string' || authCode.length<1 || authCode.length>2048) throw new DingTalkError('OAUTH_CODE_INVALID',400);

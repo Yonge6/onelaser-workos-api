@@ -13,7 +13,8 @@ before(async()=>{db=await createDatabase();await db.exec(schema);await seedDemo(
 after(async()=>{await app.close();});
 const call=(who:string,method:'GET'|'POST',url:string,payload?:any)=>app.inject({method,url,payload,headers:{authorization:'Bearer '+tokens[who]}});
 async function create(owner='m2'){const r=await call('m1','POST','/tasks',{title:'Completion fixture task',description:'Internal fictional fixture',ownerId:owner,criteria:['Provide evidence'],dueAt:'2026-11-10T12:00:00Z'});assert.equal(r.statusCode,201,r.body);return r.json();}
-const settle=()=>new Promise(r=>setTimeout(r,20));
+// Scoring runs after the response; wait until it lands instead of assuming a fixed delay (CI machines are slower).
+const settle=async(who='m2')=>{for(let i=0;i<100;i++){const pending=(await db.query("SELECT count(*)::int n FROM task_completions WHERE ai_status='pending'")).rows[0].n;if(!pending)return;await new Promise(r=>setTimeout(r,50));}};
 
 test('completing scores the result with AI; vague results score low; the score shows on the board',async()=>{
   const t=await create();
