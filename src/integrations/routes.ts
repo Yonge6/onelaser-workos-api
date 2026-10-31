@@ -15,6 +15,7 @@ import { BotOAuthService, registerBotOAuthRoutes, validatedBotRedirects, type Bo
 
 export type IntegrationOptions = {
   executiveUserIds?: string[];
+  managerUserIds?: string[];
   dingtalk?: Pick<DingTalkClient,'authorizationUrl'|'authenticate'|'listDepartmentUsers'|'sendWorkNotification'> & Partial<Pick<DingTalkClient,'getAdditionalUser'>>;
   corpId?: string; appPublicUrl?: string; secureCookies?: boolean; ai?: Pick<GrokReviewer,'model'|'inputHash'|'assess'>;
   aiReviewMode?:'api'|'bot';bot?:GrokBotAdapter;
@@ -60,6 +61,7 @@ async function upsertMember(tx:Queryable,corpId:string,profile:DingTalkProfile,o
 }
 export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOptions {
   const additionalUserIds=[...new Set((env.DINGTALK_ADDITIONAL_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean))];
+  const managerUserIds=[...new Set((env.DINGTALK_MANAGER_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean))];
   if(additionalUserIds.length&&env.WORKOS_TEAM_MODE!=='company')throw new DingTalkError('DINGTALK_CONFIGURATION_INVALID',503);
   const publicUrl=env.APP_PUBLIC_URL||env.RENDER_EXTERNAL_URL;
   if(publicUrl){const url=new URL(publicUrl);if(url.username||url.password||url.search||url.hash||url.pathname!=='/'||(url.protocol!=='https:'&&!(env.NODE_ENV!=='production'&&url.protocol==='http:'&&['localhost','127.0.0.1'].includes(url.hostname))))throw new Error('APP_PUBLIC_URL must be an application origin');}
@@ -68,7 +70,7 @@ export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOpti
   let dingtalk:DingTalkClient|undefined;
   if(!dingtalkMissing.length){
     dingtalk=new DingTalkClient({clientId:env.DINGTALK_CLIENT_ID!,clientSecret:env.DINGTALK_CLIENT_SECRET!,corpId:env.DINGTALK_CORP_ID!,agentId:env.DINGTALK_AGENT_ID,
-      allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),additionalUserIds,managerUserIds:(env.DINGTALK_MANAGER_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),redirectUri:env.DINGTALK_REDIRECT_URI||new URL('/api/auth/dingtalk/callback',publicUrl!).toString()});
+      allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),additionalUserIds,managerUserIds,redirectUri:env.DINGTALK_REDIRECT_URI||new URL('/api/auth/dingtalk/callback',publicUrl!).toString()});
   }
   if(env.AI_REVIEW_MODE&&!['api','bot'].includes(env.AI_REVIEW_MODE))throw new Error('Invalid AI review mode');
   const aiReviewMode=env.AI_REVIEW_MODE==='bot'?'bot':'api';
@@ -84,7 +86,7 @@ export function integrationOptionsFromEnv(env:NodeJS.ProcessEnv):IntegrationOpti
   if(botMcpAuthMode==='oauth'){if(!redirectUris.length)botMissing.push('GROK_BOT_OAUTH_REDIRECT_URIS');if(!publicUrl)botMissing.push('APP_PUBLIC_URL');}
   if(aiReviewMode==='bot'&&!transportMissing.length&&botOrgId?.trim())bot=new GrokBotAdapter({webhookUrl:env.GROK_BOT_WEBHOOK_URL!,webhookSecret:env.GROK_BOT_WEBHOOK_SECRET!,allowedHost:env.GROK_BOT_WEBHOOK_ALLOWED_HOST!,workerToken:botMcpAuthMode==='bearer'?env.GROK_BOT_WORKER_TOKEN:undefined,orgId:botOrgId});
   if(aiReviewMode==='api'&&key&&env.AI_MODEL_ID){ai=new GrokReviewer({apiKey:key,model:env.AI_MODEL_ID,baseUrl:env.AI_PROVIDER_BASE_URL,timeoutMs:Number(env.AI_REVIEW_TIMEOUT_MS)||45000});}
-  return {additionalUserIds,executiveUserIds:(env.WORKOS_EXECUTIVE_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,aiReviewMode,bot,botMcpAuthMode,botOAuth,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:aiReviewMode==='bot'?botMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
+  return {additionalUserIds,managerUserIds,executiveUserIds:(env.WORKOS_EXECUTIVE_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),teamMode:env.WORKOS_TEAM_MODE==='company'?'company':'department',teamName:env.WORKOS_TEAM_NAME||'OneLaser',allowedDepartmentIds:(env.DINGTALK_ALLOWED_DEPARTMENT_IDS||'').split(',').map(x=>x.trim()).filter(Boolean),dingtalk,corpId:env.DINGTALK_CORP_ID,appPublicUrl:publicUrl,secureCookies:env.NODE_ENV==='production',ai,aiReviewMode,bot,botMcpAuthMode,botOAuth,notificationsEnabled:env.DINGTALK_NOTIFICATIONS_ENABLED==='true'&&!!env.DINGTALK_AGENT_ID,frontendConnected:env.FRONTEND_CONNECTED==='true',setup:{dingtalkMissing,aiMissing:aiReviewMode==='bot'?botMissing:[...(!key?['AI_PROVIDER_API_KEY']:[]),...(!env.AI_MODEL_ID?['AI_MODEL_ID']:[])],notificationMissing:[...(!env.DINGTALK_AGENT_ID?['DINGTALK_AGENT_ID']:[]),...(env.DINGTALK_NOTIFICATIONS_ENABLED!=='true'?['DINGTALK_NOTIFICATIONS_ENABLED']:[])]}};
 }
 export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,options:IntegrationOptions){
   const secure=options.secureCookies===true,sessionName=sessionCookieName(secure),nonceName=oauthCookieName(secure);
@@ -108,11 +110,14 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
   app.get('/auth/dingtalk/start',async(req,reply)=>{
     limited('oauth:'+req.ip,30,60000);
     if(!options.dingtalk||!options.corpId||!options.appPublicUrl)deny(501,'DINGTALK_NOT_CONFIGURED','Real DingTalk authentication is not integrated');
-    const returnRequest=(req.query as Record<string,unknown>)?.oauth_request;
+    const query=z.object({destination:z.literal('caldock-studio').optional(),lang:z.enum(['zh','en']).optional(),oauth_request:z.string().optional()}).passthrough().parse(req.query);
+    const returnRequest=query.oauth_request;
+    if(query.destination&&returnRequest!==undefined)deny(400,'OAUTH_STATE_INVALID','Login destination is ambiguous');
+    if(query.destination&&!options.allowedDepartmentIds?.length&&!(options.teamMode==='company'&&options.additionalUserIds?.length))deny(501,'DINGTALK_NOT_CONFIGURED','Studio DingTalk membership scope is not configured');
     if(returnRequest!==undefined){if(typeof returnRequest!=='string')deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');await resumeConsent(returnRequest,req.headers.cookie);}
     const state=randomBytes(32).toString('base64url'),nonce=randomBytes(32).toString('base64url');
     await db.query('DELETE FROM oauth_states WHERE expires_at<now()');
-    await db.query('INSERT INTO oauth_states(state_hash,nonce_hash,expires_at,return_request_id) VALUES($1,$2,$3,$4)',[hash(state),hash(nonce),new Date(Date.now()+600000).toISOString(),returnRequest||null]);
+    await db.query('INSERT INTO oauth_states(state_hash,nonce_hash,expires_at,return_request_id,return_destination,return_language) VALUES($1,$2,$3,$4,$5,$6)',[hash(state),hash(nonce),new Date(Date.now()+600000).toISOString(),returnRequest||null,query.destination||null,query.destination?(query.lang||'zh'):null]);
     reply.header('Set-Cookie',cookie(nonceName,nonce,secure,600));
     return reply.redirect(options.dingtalk.authorizationUrl(state));
   });
@@ -121,13 +126,16 @@ export async function registerIntegrationRoutes(app:FastifyInstance,db:Database,
     const input=z.object({state:z.string().regex(/^[A-Za-z0-9_-]{43}$/),authCode:z.string().min(1).max(2048)}).passthrough().parse(req.method==='POST'?req.body:req.query);
     const nonce=readCookie(req.headers.cookie,nonceName);
     if(!nonce)deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');
-    const returnRequest=await db.transaction(async tx=>{
+    const returnState=await db.transaction(async tx=>{
       const state=(await tx.query('SELECT * FROM oauth_states WHERE state_hash=$1 AND expires_at>now() FOR UPDATE',[hash(input.state)])).rows[0];
       if(!state||!sameSecret(state.nonce_hash,hash(nonce)))deny(400,'OAUTH_STATE_INVALID','Login expired or could not be verified');
       await tx.query('DELETE FROM oauth_states WHERE state_hash=$1',[hash(input.state)]);
-      return state.return_request_id as string|null;
+      return {request:state.return_request_id as string|null,destination:state.return_destination as string|null,language:state.return_language as string|null};
     });
-    const target=returnRequest?await resumeConsent(returnRequest,req.headers.cookie):options.appPublicUrl;
+    // Only the nonce-bound server record chooses a destination. Callback query
+    // parameters can neither introduce a return URL nor alter its language.
+    const target=returnState.request?await resumeConsent(returnState.request,req.headers.cookie):returnState.destination==='caldock-studio'
+      ?new URL('/decision-studio/?tab=team&lang='+(returnState.language==='en'?'en':'zh'),options.appPublicUrl).toString():options.appPublicUrl;
     const profile=await safeUpstream(()=>options.dingtalk!.authenticate(input.authCode));
     const session=await db.transaction(async tx=>{
       const user=await upsertMember(tx,options.corpId!,profile,options);return issueSession(tx,user.id);

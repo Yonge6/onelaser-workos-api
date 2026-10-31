@@ -5,7 +5,8 @@ import {isDeepStrictEqual} from 'node:util';
 import pg from 'pg';
 import {z} from 'zod';
 import type {Database, Queryable} from './db.js';
-import {hash, readCookie, sameSecret} from './auth.js';
+import {sameSecret} from './auth.js';
+import {studioAuthentication,type StudioDingTalkOptions,type StudioMember} from './caldock-studio-auth.js';
 import {deny} from './errors.js';
 import {studioSeed, studioRanges} from './caldock-studio-seed.js';
 
@@ -17,8 +18,8 @@ for(const {values} of Object.values(legacyStudioSeed.scenarios)){
  delete (values as Partial<typeof values>).monthlyCommissionMonths;
 }
 
-// Public viewing was explicitly requested; writes always require a CalDock
-// session AND studio membership. Commerce admin alone cannot edit a plan.
+// Public viewing was explicitly requested; writes require explicit Studio
+// membership and a live CalDock or scoped, verified DingTalk employee session.
 export const studioSchema=`
 CREATE TABLE IF NOT EXISTS caldock_studio_state (
  id integer PRIMARY KEY CHECK(id=1), revision integer NOT NULL DEFAULT 0,
@@ -27,6 +28,12 @@ CREATE TABLE IF NOT EXISTS caldock_studio_state (
 CREATE TABLE IF NOT EXISTS caldock_studio_members (
  user_id text PRIMARY KEY REFERENCES caldock_users(id),
  role text NOT NULL CHECK(role IN ('owner','editor','viewer'))
+);
+CREATE TABLE IF NOT EXISTS caldock_studio_dingtalk_members (
+ workos_user_id text PRIMARY KEY REFERENCES users(id),
+ caldock_user_id text NOT NULL UNIQUE REFERENCES caldock_users(id),
+ bootstrap_owner boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS caldock_studio_history (
  id text PRIMARY KEY, revision integer NOT NULL UNIQUE, actor_id text NOT NULL REFERENCES caldock_users(id),
@@ -66,7 +73,7 @@ function localBus(db:Database){let bus=buses.get(db);if(!bus){bus=new EventEmitt
 const clone=(v:any)=>structuredClone(v),get=(obj:any,path:string[])=>path.reduce((o,k)=>o&&Object.hasOwn(o,k)?o[k]:undefined,obj)??null;
 function set(obj:any,path:string[],value:any,remove=false){let o=obj;for(const k of path.slice(0,-1)){if(!o[k]||typeof o[k]!=='object')deny(409,'STUDIO_PARENT_REMOVED','The parent item no longer exists');o=o[k];}if(remove)delete o[path.at(-1)!];else o[path.at(-1)!]=clone(value);}
 const overlap=(a:string[],b:string[])=>a.slice(0,Math.min(a.length,b.length)).every((k,i)=>k===b[i]);
-export type StudioOptions={publicUrl?:string;secureCookies?:boolean;connectionString?:string;ownerUserIds?:string[];heartbeatMs?:number};
+export type StudioOptions={publicUrl?:string;secureCookies?:boolean;connectionString?:string;ownerUserIds?:string[];heartbeatMs?:number;dingtalk?:StudioDingTalkOptions};
 export async function registerCaldockStudio(app:FastifyInstance,db:Database,options:StudioOptions={}){
  const origin=new URL(options.publicUrl||'http://localhost:4173').origin,secure=options.secureCookies===true;
  // Explicit private deployment configuration only; never first-visitor ownership.
@@ -84,19 +91,9 @@ export async function registerCaldockStudio(app:FastifyInstance,db:Database,opti
  await connectBus();
  app.addHook('preClose',async()=>{closing=true;clearTimeout(retry);for(const close of streams)close();await listener?.end().catch(()=>{});});
  const snapshot=async(tx:Queryable=db)=>{const row=(await tx.query('SELECT revision,state FROM caldock_studio_state WHERE id=1')).rows[0];return {revision:row.revision,state:row.state};};
- type Member={id:string;name:string;username:string;role:string;csrf:string;sessionHash:string};
- async function member(req:FastifyRequest):Promise<Member|null>{
-  const cookie=readCookie(req.headers.cookie,(secure?'__Host-':'')+'caldock_session');if(!cookie)return null;
-  const row=(await db.query('SELECT u.id,u.display_name,u.email,s.csrf_token,m.role FROM caldock_sessions s JOIN caldock_users u ON u.id=s.user_id LEFT JOIN caldock_studio_members m ON m.user_id=u.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.active=true',[hash(cookie)])).rows[0];
-  return row?.role?{id:row.id,name:row.display_name,username:row.email||row.id,role:row.role,csrf:row.csrf_token,sessionHash:hash(cookie)}:null;
- }
+ type Member=StudioMember;
+ const {member,authorizeTx,eligibleOwnerCount}=studioAuthentication(db,secure,options.dingtalk);
  async function requireMember(req:FastifyRequest,write=false,owner=false){const m=await member(req);if(!m)deny(403,'STUDIO_MEMBERSHIP_REQUIRED','Studio editing access has not been granted');if(owner&&m.role!=='owner'||write&&m.role==='viewer')deny(403,'STUDIO_READ_ONLY','This role cannot make this change');if(write&&(req.headers.origin!==origin||typeof req.headers['x-csrf-token']!=='string'||!sameSecret(req.headers['x-csrf-token'],m.csrf)))deny(403,'STUDIO_CSRF_INVALID','Request origin or security token is invalid');return m;}
- async function authorizeTx(tx:Queryable,m:Member,owner=false){
-  // Lock the membership row inside the write transaction so revocation cannot
-  // race a write that checked permissions earlier in the request.
-  const row=(await tx.query('SELECT m.role FROM caldock_studio_members m JOIN caldock_users u ON u.id=m.user_id JOIN caldock_sessions s ON s.user_id=u.id WHERE m.user_id=$1 AND s.token_hash=$2 AND s.expires_at>now() AND u.active=true FOR UPDATE OF m',[m.id,m.sessionHash])).rows[0];
-  if(!row||row.role==='viewer'||owner&&row.role!=='owner')deny(403,'STUDIO_READ_ONLY','Studio write permission is no longer available');
- }
  async function duplicate(tx:Queryable,requestId:string,m:Member){const row=(await tx.query('SELECT actor_id FROM caldock_studio_history WHERE id=$1',[requestId])).rows[0];if(row&&row.actor_id!==m.id)deny(409,'STUDIO_REQUEST_ID_REUSED','Request ID was already used');return !!row;}
  async function commit(tx:Queryable,m:Member,state:any,rev:number,path:string[],before:any,value:any,requestId:string,operation='patch',restoredFrom:string|null=null){
   const parsed=studioStateSchema.parse(state);
@@ -108,11 +105,16 @@ export async function registerCaldockStudio(app:FastifyInstance,db:Database,opti
  const conflict=(reply:any,current:any)=>reply.code(409).send({error:'STUDIO_FIELD_CONFLICT',detail:'The field changed. Choose a version explicitly.',current});
  app.register(async routes=>{
   routes.addHook('onRequest',async(req,reply)=>{reply.header('Cache-Control','no-store');if(req.headers.origin&&req.headers.origin!==origin)deny(403,'STUDIO_ORIGIN_INVALID','Request origin is not permitted');});
-  routes.get('/health',async()=>({app:'caldock-decision-studio',version:4,publicView:true,transport:'sse',teamUrl:origin+'/decision-studio/'}));
+  routes.get('/health',async()=>({app:'caldock-decision-studio',version:4,publicView:true,transport:'sse',teamUrl:origin+'/decision-studio/',auth:{provider:'dingtalk',loginEnabled:!!options.dingtalk,loginUrl:'/api/auth/dingtalk/start?destination=caldock-studio'}}));
   routes.get('/me',async req=>{const {sessionHash,...user}=await requireMember(req);return {user};});
   routes.get('/state',async()=>snapshot());
   routes.get('/history',async()=>({history:(await db.query('SELECT h.id,h.revision,h.path,h.before_value AS before,h.after_value AS value,h.operation,h.restored_from,h.created_at,u.display_name AS actor FROM caldock_studio_history h JOIN caldock_users u ON u.id=h.actor_id ORDER BY revision DESC LIMIT 100')).rows}));
-  routes.get('/members',async req=>{await requireMember(req);return {members:(await db.query('SELECT u.id,u.display_name AS name,u.email AS username,m.role FROM caldock_studio_members m JOIN caldock_users u ON u.id=m.user_id ORDER BY u.display_name')).rows};});
+  routes.get('/members',async req=>{const member=await requireMember(req);return {members:(await db.query(`SELECT u.id,u.display_name AS name,COALESCE(u.email,u.id) AS username,m.role,
+   CASE WHEN d.workos_user_id IS NULL THEN 'caldock' ELSE 'dingtalk' END AS provider
+   FROM caldock_users u LEFT JOIN caldock_studio_members m ON m.user_id=u.id
+   LEFT JOIN caldock_studio_dingtalk_members d ON d.caldock_user_id=u.id
+   WHERE m.user_id IS NOT NULL OR ($1=true AND d.workos_user_id IS NOT NULL)
+   ORDER BY u.display_name,u.id`,[member.role==='owner'])).rows};});
   routes.patch('/state',async(req,reply)=>{
    const m=await requireMember(req,true),input=patchInput.parse(req.body);
    if(!['scenarios','marketing'].includes(input.path[0]))deny(400,'STUDIO_INVALID_PATH','Only planning fields may be changed');
@@ -143,11 +145,16 @@ export async function registerCaldockStudio(app:FastifyInstance,db:Database,opti
   routes.put('/members/:id',async req=>{
    const m=await requireMember(req,true,true),userId=z.string().uuid().parse((req.params as any).id),input=z.object({role:z.enum(['owner','editor','viewer']).nullable(),expectedRole:z.enum(['owner','editor','viewer']).nullable()}).strict().parse(req.body);
    return db.transaction(async tx=>{await tx.query('SELECT id FROM caldock_studio_state WHERE id=1 FOR UPDATE');await authorizeTx(tx,m,true);
-    const user=(await tx.query('SELECT id FROM caldock_users WHERE id=$1 AND active=true',[userId])).rows[0];if(!user)deny(404,'STUDIO_MEMBER_NOT_FOUND','The CalDock account must sign in before access can be granted');
-    const old=(await tx.query('SELECT role FROM caldock_studio_members WHERE user_id=$1',[userId])).rows[0]?.role||null;
+    // Match login's mapping -> CalDock account -> membership lock order.
+    await tx.query('SELECT workos_user_id FROM caldock_studio_dingtalk_members WHERE caldock_user_id=$1 FOR UPDATE',[userId]);
+    const user=(await tx.query('SELECT id FROM caldock_users WHERE id=$1 AND active=true FOR UPDATE',[userId])).rows[0];if(!user)deny(404,'STUDIO_MEMBER_NOT_FOUND','The CalDock account must sign in before access can be granted');
+    const old=(await tx.query('SELECT role FROM caldock_studio_members WHERE user_id=$1 FOR UPDATE',[userId])).rows[0]?.role||null;
     if(old!==input.expectedRole)deny(409,'STUDIO_MEMBER_CONFLICT','Membership changed; refresh before updating');
-    if(old==='owner'&&input.role!=='owner'&&Number((await tx.query("SELECT count(*) AS n FROM caldock_studio_members WHERE role='owner'")).rows[0].n)<=1)deny(409,'STUDIO_LAST_OWNER','The last owner cannot be removed');
+    if(old==='owner'&&input.role!=='owner'&&await eligibleOwnerCount(tx,userId)===0)deny(409,'STUDIO_LAST_OWNER','The last owner cannot be removed');
     if(input.role)await tx.query('INSERT INTO caldock_studio_members(user_id,role) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role',[userId,input.role]);else await tx.query('DELETE FROM caldock_studio_members WHERE user_id=$1',[userId]);
+    // Explicit Studio grants replace automatic bootstrap ownership; a removed
+    // member's persistent identity mapping remains so login cannot re-grant it.
+    if(old!==input.role)await tx.query('UPDATE caldock_studio_dingtalk_members SET bootstrap_owner=false WHERE caldock_user_id=$1',[userId]);
     await tx.query('INSERT INTO caldock_studio_access_audit(id,actor_id,member_id,before_role,after_role) VALUES($1,$2,$3,$4,$5)',[randomUUID(),m.id,userId,old,input.role]);return {updated:true};
    });
   });
