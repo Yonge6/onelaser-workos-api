@@ -95,6 +95,11 @@ test('canonical origin switches only the approved Render host and retains health
             assert.match(upstreamPolicy, /(?:^|;)\s*frame-src 'self';/, path);
             assert.doesNotMatch(upstreamPolicy, /https:\/\/wiki\.1laser\.com/, path);
           }
+          const caldock = await get('craftos.app', '/caldock/?lang=zh');
+          assert.match(caldock.csp, /(?:^|;)\s*frame-src https:\/\/www\.youtube-nocookie\.com;/);
+          assert.match(caldock.csp, /(?:^|;)\s*script-src 'self';/);
+          assert.match(caldock.csp, /(?:^|;)\s*frame-ancestors 'none';/);
+          assert.equal(caldock.frameOptions, 'DENY');
           const wiki = await get('craftos.app', '/wiki/?lang=zh');
           assert.equal(wiki.status, 200); assert.equal(wiki.body, 'complete public wiki');
           assert.equal(wiki.frameOptions, 'SAMEORIGIN');

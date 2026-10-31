@@ -54,7 +54,7 @@ http://:{$PORT:10000} {
     @caldock_public_assets path /caldock/assets/*
     header @caldock_public_assets Cache-Control "public, max-age=86400"
     handle_path /caldock/* {
-        header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
         root * /app/caldock
         file_server
     }
