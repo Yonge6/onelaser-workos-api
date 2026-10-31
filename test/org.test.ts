@@ -45,6 +45,8 @@ test('only admins manage reporting lines, titles, roles and admins; cycles are r
  const {app,call}=await setup();
  try{
   assert.equal((await call('m2','GET','/org/members')).statusCode,403);
+  const chart=(await call('m2','GET','/org/chart'));assert.equal(chart.statusCode,200,'any member can read the org chart');
+  const row=chart.json().items.find((u:any)=>u.id==='m1');assert.ok(row&&'location' in row&&'title' in row);assert.ok(!('email' in row)&&!('phone' in row)&&!('grants' in row),'org chart exposes no contact details or grants');
   assert.equal((await call('m4','PATCH','/org/members/m2',{managerId:'m4'})).statusCode,403,'manager role alone is not admin');
   const list=(await call('m1','GET','/org/members')).json().items;assert.ok(list.find((u:any)=>u.id==='m1').adminSource==='deployment');
   assert.equal((await call('m1','PATCH','/org/members/m2',{managerId:'m1',title:'Designer'})).json().manager_id,'m1');

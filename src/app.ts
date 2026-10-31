@@ -5,6 +5,7 @@ import { registerPublicWikiRoutes, PUBLIC_WIKI_PATHS, type PublicWikiOptions } f
 import { registerShopifyRoutes, type ShopifyOptions } from './shopify.js';
 import { registerOkrRoutes } from './okr.js';
 import { registerOkrCollabRoutes } from './okr-collab.js';
+import { registerCompletionRoutes, jsonModel, type JsonModel } from './completions.js';
 import { registerOrgRoutes, isAdmin as isOrgAdmin } from './org.js';
 import { executiveSummary } from './executive.js';
 import Fastify, { type FastifyRequest } from 'fastify';
@@ -12,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import type { Database, Queryable } from './db.js';
 import { cookie, hash, issueSession, readCookie, resolveSession, sameSecret, sessionCookieName, type User } from './auth.js';
-import { visibleObjective, visibleTask, krProgress, hasKrMetric } from './domain.js';
+import { visibleObjective, visibleTask, attachReportingScope, krProgress, hasKrMetric } from './domain.js';
 import { attachOkrImportMetadata } from './okr-import.js';
 import { languageFrom, message, type Language } from './i18n.js';
 import { ApiError, deny } from './errors.js';
@@ -30,13 +31,16 @@ const taskInput = z.object({
   ownerId: identifier, reviewerId: identifier.optional(), criteria: z.array(z.string().trim().min(1).max(1000)).min(1).max(20),
   dueAt: z.string().datetime({ offset: true }), krId: identifier.optional(), boardGroupId:identifier.optional(), boardPriority:z.string().max(80).optional(), boardCategory:z.string().max(80).optional(), parentTaskId:identifier.optional()
 }).strict();
-const submissionInput = z.object({ expectedVersion, title:z.string().trim().min(3).max(200), description:z.string().trim().min(10).max(30000), evidenceUrl:evidenceUrl.optional() }).strict();
+const submissionInput = z.object({ expectedVersion, title:z.string().trim().min(3).max(200), description:z.string().trim().min(30).max(30000), evidenceUrl:evidenceUrl.optional() }).strict();
 const reviewInput = z.object({ expectedVersion, submissionVersion:z.number().int().min(1), decision:z.enum(['accept','return']), quality:z.number().int().min(0).max(100).optional(), note:z.string().trim().min(5).max(4000), verifiedCurrentSubmission:z.boolean().optional() }).strict();
 const measurementInput = z.object({ expectedVersion, actual:z.number().finite(), source:z.string().trim().min(3).max(2000), note:z.string().trim().min(5).max(4000) }).strict();
-export type AppOptions = { db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean; integrations?:IntegrationOptions; support?:SupportOptions; publicWiki?:PublicWikiOptions; shopify?:ShopifyOptions; caldock?:CaldockOptions };
+export type AppOptions = { completionModel?:JsonModel|null; fxFetcher?:typeof fetch; db:Database; environment?:string; allowDevLogin?:boolean; devLoginSecret?:string; closeDatabase?:boolean; integrations?:IntegrationOptions; support?:SupportOptions; publicWiki?:PublicWikiOptions; shopify?:ShopifyOptions; caldock?:CaldockOptions };
 
 function actor(req: FastifyRequest): User { return req.actor || deny(401,'UNAUTHENTICATED','Authentication is required'); }
-function scope(user: User) { return user.role === 'manager' ? ['org_id=$1 AND department_id=$2',[user.org_id,user.department_id]] as const : ['org_id=$1 AND owner_id=$2',[user.org_id,user.id]] as const; }
+function scope(user: User) {
+  if (Array.isArray(user.visibleOwnerIds)) return ['org_id=$1 AND (owner_id=ANY($2::text[]) OR reviewer_id=($2::text[])[1])',[user.org_id,user.visibleOwnerIds]] as const;
+  return user.role === 'manager' ? ['org_id=$1 AND department_id=$2',[user.org_id,user.department_id]] as const : ['org_id=$1 AND (owner_id=$2 OR reviewer_id=$2)',[user.org_id,user.id]] as const;
+}
 async function loadTask(tx: Queryable, user: User, id: string, lock=false) {
   const result = await tx.query('SELECT * FROM tasks WHERE id=$1' + (lock?' FOR UPDATE':''),[id]);
   const task = result.rows[0]; if (!visibleTask(user,task)) deny(404,'NOT_FOUND','Task not found'); return task;
@@ -53,6 +57,8 @@ async function taskDetail(db:Queryable, task:any) {
   return {...task,submissions,reviews,currentReview:task.status==='accepted' ? [...reviews].reverse().find(r=>r.submission_version===task.submission_version&&r.decision==='accept') || null : null};
 }
 export async function buildApp(options:AppOptions) {
+  const aiReviewConfigured=()=>{const integrations:any=(options as any).integrations||{};return !!(integrations.aiReviewMode==='bot'?integrations.bot:integrations.ai);};
+  const aiAssessmentRequired=()=>process.env.REQUIRE_AI_ASSESSMENT!=='false'&&aiReviewConfigured();
   const {db}=options, environment=options.environment || 'development';
   const devEnabled=options.allowDevLogin===true && environment!=='production';
   if(devEnabled && (options.devLoginSecret?.length || 0)<32) throw new Error('DEV_LOGIN_SECRET must contain at least 32 characters when development login is enabled');
@@ -85,6 +91,7 @@ export async function buildApp(options:AppOptions) {
     req.sessionToken=token||null;req.cookieAuthenticated=!req.headers.authorization&&!!cookieToken;
     req.actor=await resolveSession(db,token?'Bearer '+token:undefined);
     if(!req.actor) deny(401,'UNAUTHENTICATED','Authentication is required');
+    await attachReportingScope(db,req.actor);
     if(req.cookieAuthenticated&&!['GET','HEAD','OPTIONS'].includes(req.method)){
       if(req.headers.origin&&req.headers.origin!==new URL(integrations.appPublicUrl||'http://localhost').origin)deny(403,'CSRF_INVALID','Request origin or security token is invalid');
       const supplied=req.headers['x-csrf-token'];
@@ -105,7 +112,7 @@ export async function buildApp(options:AppOptions) {
     catch { return reply.code(503).send({status:'unavailable',service:'onelaser-workos-api'}); }
     return {status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false};
   });
-  app.get('/capabilities',async()=>({tasks:true,objectives:true,okrCollaboration:true,orgProfiles:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?(integrations.bot&&(!(integrations.botMcpAuthMode==='oauth')||!!(integrations.botOAuth?.publicUrl&&integrations.botOAuth.orgId&&integrations.botOAuth.redirectUris.length))):integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',botMcpAuthMode:integrations.botMcpAuthMode||'bearer',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
+  app.get('/capabilities',async()=>({taskCompletion:true,aiCompletionScore:!!(options.completionModel===undefined?(process.env.AI_PROVIDER_API_KEY||process.env.XAI_API_KEY):options.completionModel),aiInsights:!!(options.completionModel===undefined?(process.env.AI_PROVIDER_API_KEY||process.env.XAI_API_KEY):options.completionModel),liveFx:true,aiAssessmentRequired:aiAssessmentRequired(),tasks:true,objectives:true,okrCollaboration:true,orgProfiles:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?(integrations.bot&&(!(integrations.botMcpAuthMode==='oauth')||!!(integrations.botOAuth?.publicUrl&&integrations.botOAuth.orgId&&integrations.botOAuth.redirectUris.length))):integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',botMcpAuthMode:integrations.botMcpAuthMode||'bearer',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
   const attempts=new Map<string,{count:number;until:number}>();
   app.post('/auth/dev-login',async(req,reply)=>{
     if(!devEnabled) deny(404,'DEV_LOGIN_DISABLED','Development login is disabled');
@@ -130,7 +137,7 @@ export async function buildApp(options:AppOptions) {
   registerTaskBoardRoutes(app,db);
   app.get('/tasks',async req=>{
     const user=actor(req),[where,params]=scope(user);
-    return {items:(await db.query(`SELECT * FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};
+    return {items:(await db.query(`SELECT tasks.*,(SELECT json_build_object('ai_status',c.ai_status,'ai_score',c.ai_score) FROM task_completions c WHERE c.task_id=tasks.id AND c.superseded_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS completion FROM tasks WHERE ${where} ORDER BY created_at,id LIMIT 100`,[...params])).rows,limit:100};
   });
   app.get<{Params:{id:string}}>('/tasks/:id',async req=>taskDetail(db,await loadTask(db,actor(req),identifier.parse(req.params.id))));
   app.post('/tasks',async(req,reply)=>{
@@ -169,6 +176,12 @@ export async function buildApp(options:AppOptions) {
       if(task.reviewer_id!==user.id) deny(403,'FORBIDDEN','Only the designated reviewer can confirm this task');
       if(task.version!==input.expectedVersion||task.submission_version!==input.submissionVersion||task.status!=='submitted') deny(409,'VERSION_CONFLICT','Review must match the currently submitted version');
       if(input.decision==='accept'&&(input.quality===undefined||input.verifiedCurrentSubmission!==true)) deny(400,'HUMAN_VERIFICATION_REQUIRED','A quality score and actual evidence verification are required');
+      // A task only counts as done when the owner's evidence has an AI assessment that found it sufficient.
+      if(input.decision==='accept'&&aiAssessmentRequired()){
+        const ev=(await tx.query('SELECT status FROM ai_evaluations WHERE task_id=$1 AND submission_version=$2 ORDER BY created_at DESC LIMIT 1',[id,task.submission_version])).rows[0];
+        if(!ev) deny(409,'AI_ASSESSMENT_REQUIRED','Run the AI assessment on the current evidence before accepting');
+        if(ev.status!=='ready_for_human_review') deny(409,'AI_EVIDENCE_INSUFFICIENT','The AI assessment found the evidence insufficient; ask the owner to add evidence');
+      }
       const review=(await tx.query('INSERT INTO reviews(id,task_id,submission_version,reviewer_id,decision,quality,note) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[randomUUID(),id,input.submissionVersion,user.id,input.decision,input.decision==='accept'?input.quality:null,input.note])).rows[0];
       await tx.query('UPDATE tasks SET version=version+1,status=$2,board_status=$3,board_done_at=$4,updated_at=now(),updated_by=$5 WHERE id=$1',[id,input.decision==='accept'?'accepted':'revision',input.decision==='accept'?'done':'working',input.decision==='accept'?new Date().toISOString():null,user.id]);
       await audit(tx,user,'review.'+input.decision,id,{submissionVersion:input.submissionVersion,quality:review.quality},task.owner_id);return {review,taskVersion:task.version+1};
@@ -199,10 +212,12 @@ export async function buildApp(options:AppOptions) {
     const user=actor(req),[where,params]=scope(user),tasks=(await db.query(`SELECT id,title,status,owner_id,due_at FROM tasks WHERE ${where} AND status<>$3 ORDER BY due_at LIMIT 100`,[...params,'accepted'])).rows;
     return {status:'draft',sent:false,recipient:user.id,items:tasks};
   });
-  app.get('/audit',async req=>{const [where,params]=scope(actor(req));return {items:(await db.query(`SELECT * FROM audit_events WHERE ${where} ORDER BY created_at DESC,id LIMIT 100`,[...params])).rows,limit:100};});
+  app.get('/audit',async req=>{const u=actor(req),[where,params]=Array.isArray(u.visibleOwnerIds)?['org_id=$1 AND owner_id=ANY($2::text[])',[u.org_id,u.visibleOwnerIds]] as const:u.role==='manager'?['org_id=$1 AND department_id=$2',[u.org_id,u.department_id]] as const:['org_id=$1 AND owner_id=$2',[u.org_id,u.id]] as const;return {items:(await db.query(`SELECT * FROM audit_events WHERE ${where} ORDER BY created_at DESC,id LIMIT 100`,[...params])).rows,limit:100};});
   await registerOkrRoutes(app,db);
   await registerOkrCollabRoutes(app,db);
   await registerOrgRoutes(app,db,{executiveUserIds:integrations.executiveUserIds||[]});
+  const completionModel=options.completionModel===undefined?jsonModel({apiKey:process.env.AI_PROVIDER_API_KEY||process.env.XAI_API_KEY,model:process.env.AI_SCORING_MODEL_ID||process.env.AI_MODEL_ID,baseUrl:process.env.AI_PROVIDER_BASE_URL}):options.completionModel||undefined;
+  await registerCompletionRoutes(app,db,{model:completionModel,fxFetcher:options.fxFetcher,fxFallback:Number(process.env.FX_FALLBACK_CNY)||7.1});
   await registerIntegrationRoutes(app,db,integrations);
   if(options.closeDatabase!==false) app.addHook('onClose',async()=>db.close());
   return app;

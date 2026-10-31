@@ -1,3 +1,4 @@
+import { COMPLETION_LOCK_MS } from './completions.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
@@ -57,7 +58,7 @@ export async function validateBoardCreation(tx:Queryable,user:User,input:any){
  return input.boardGroupId||'todo';
 }
 export function effectiveGroup(task:any,tasks:any[],now=Date.now()){
- const oldDone=(t:any)=>t.board_status==='done'&&t.board_done_at&&new Date(t.board_done_at).getTime()<=now-7*86400000;
+ const oldDone=(t:any)=>t.board_status==='done'&&t.board_done_at&&new Date(t.board_done_at).getTime()<=now-COMPLETION_LOCK_MS;
  return oldDone(task)&&tasks.filter(t=>t.parent_task_id===task.id).every(oldDone)?'completed':task.board_group_id;
 }
 export function registerTaskBoardRoutes(app:FastifyInstance,db:Database){
@@ -65,7 +66,7 @@ export function registerTaskBoardRoutes(app:FastifyInstance,db:Database){
  app.get('/task-board',async req=>{
   const user=actor(req.actor),config=await boardConfig(db,user);
   // Scope before any parent/group calculation: hidden tasks never contribute names or counts.
-  const tasks=(await db.query('SELECT tasks.*,(SELECT count(*)::int FROM task_updates u WHERE u.task_id=tasks.id AND u.org_id=tasks.org_id) AS update_count FROM tasks WHERE org_id=$1 AND department_id=$2'+(user.role==='manager'?'':' AND owner_id=$3')+' ORDER BY created_at,id LIMIT 1000',user.role==='manager'?[user.org_id,user.department_id]:[user.org_id,user.department_id,user.id])).rows;
+  const tasks=(await db.query('SELECT tasks.*,(SELECT count(*)::int FROM task_updates u WHERE u.task_id=tasks.id AND u.org_id=tasks.org_id) AS update_count,(SELECT json_build_object(\'ai_status\',c.ai_status,\'ai_score\',c.ai_score,\'ai_summary\',c.ai_summary) FROM task_completions c WHERE c.task_id=tasks.id AND c.superseded_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS completion,(SELECT max(u.created_at) FROM task_updates u WHERE u.task_id=tasks.id) AS last_update_at,(SELECT count(*)::int FROM task_attachments a WHERE a.task_id=tasks.id) AS attachment_count FROM tasks WHERE org_id=$1 AND department_id=$2 ORDER BY created_at,id LIMIT 1000',[user.org_id,user.department_id])).rows.filter((t:any)=>visibleTask(user,t));
   const allChildren=(await db.query('SELECT parent_task_id,board_status,board_done_at FROM tasks WHERE org_id=$1 AND department_id=$2 AND parent_task_id IS NOT NULL',[user.org_id,user.department_id])).rows;
   const now=Date.now(),items=tasks.map(t=>({...t,effective_group_id:effectiveGroup(t,allChildren,now)}));
   const view=(await db.query('SELECT data FROM task_board_views WHERE user_id=$1 AND org_id=$2',[user.id,user.org_id])).rows[0]?.data;
@@ -112,7 +113,7 @@ export function registerTaskBoardRoutes(app:FastifyInstance,db:Database){
    const config=(await boardConfig(tx,user)).data;
    if(v.priority!==undefined&&!config.priority.some((x:any)=>x.id===v.priority))deny(400,'INVALID_BOARD_LABEL','Select an existing board label');
    if(v.category&&!config.category.some((x:any)=>x.id===v.category))deny(400,'INVALID_BOARD_LABEL','Select an existing board label');
-   if(v.groupId&&(!config.groups.some((x:any)=>x.id===v.groupId)||v.groupId==='completed'))deny(400,'INVALID_BOARD_GROUP','Completed is managed by the seven-day completion rule');
+   if(v.groupId&&(!config.groups.some((x:any)=>x.id===v.groupId)||v.groupId==='completed'))deny(400,'INVALID_BOARD_GROUP','Completed is managed by the three-day completion rule');
    if(v.groupId&&user.role!=='manager'&&(await tx.query('SELECT id FROM tasks WHERE parent_task_id=$1 AND owner_id<>$2 LIMIT 1',[taskId,user.id])).rows.length)deny(403,'FORBIDDEN','A manager must move a parent with other owners');
    if(v.groupId&&task.parent_task_id)deny(400,'INVALID_BOARD_GROUP','Move the parent task to move its subitems');
    let owner=task.owner_id,reviewer=task.reviewer_id;
@@ -121,6 +122,8 @@ export function registerTaskBoardRoutes(app:FastifyInstance,db:Database){
     const people=(await tx.query('SELECT * FROM users WHERE id=ANY($1::text[]) AND org_id=$2 AND department_id=$3 AND active=true',[[owner,reviewer],user.org_id,user.department_id])).rows;
     if(!people.some(p=>p.id===owner)||!people.some(p=>p.id===reviewer&&p.role==='manager'&&p.id!==owner))deny(400,'INVALID_REVIEWER','Select an active owner and a different authorized reviewer');
    }
+   if(v.status==='done'&&task.board_status!=='done')deny(409,'COMPLETION_RESULT_REQUIRED','Write the result and a self-evaluation to complete this task');
+   if(v.status&&v.status!=='done'&&task.board_status==='done'&&task.board_done_at&&Date.now()-new Date(task.board_done_at).getTime()>=COMPLETION_LOCK_MS)deny(409,'COMPLETION_LOCKED','This task was completed more than 3 days ago; its result and score are locked');
    const status=v.status??task.board_status,doneAt=status==='done'?(task.board_status==='done'&&task.board_done_at?task.board_done_at:new Date().toISOString()):null;
    const next=(await tx.query('UPDATE tasks SET title=$2,board_priority=$3,board_status=$4,board_category=$5,board_group_id=$6,board_notes=$7,due_at=$8,owner_id=$9,reviewer_id=$10,board_done_at=$11,updated_at=now(),updated_by=$12,version=version+1 WHERE id=$1 RETURNING *',[taskId,v.title??task.title,v.priority??task.board_priority,status,v.category??task.board_category,v.groupId??task.board_group_id,v.notes??task.board_notes,v.dueAt??task.due_at,owner,reviewer,doneAt,user.id])).rows[0];
    if(v.groupId)await tx.query('UPDATE tasks SET board_group_id=$2,version=version+1,updated_at=now(),updated_by=$3 WHERE parent_task_id=$1 AND org_id=$4 AND department_id=$5',[taskId,v.groupId,user.id,user.org_id,user.department_id]);

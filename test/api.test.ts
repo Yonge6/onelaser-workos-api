@@ -76,7 +76,7 @@ test('personal KR access is scoped and owner must be able to see a linked KR',as
 });
 test('only owner can submit; evidence URL is metadata and credentials/non-HTTPS are rejected',async()=>{
   const task=await newTask();
-  const payload={expectedVersion:task.version,title:'Evidence record',description:'Synthetic test description'};
+  const payload={expectedVersion:task.version,title:'Evidence record',description:'Synthetic test description with enough detail to pass'};
   assert.equal((await call('m1','POST',`/tasks/${task.id}/submissions`,payload)).statusCode,403);
   for(const evidenceUrl of ['http://example.com','https://user:secret@example.com'])assert.equal((await call('m2','POST',`/tasks/${task.id}/submissions`,{...payload,evidenceUrl})).statusCode,400);
 });

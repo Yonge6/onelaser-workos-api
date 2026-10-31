@@ -25,6 +25,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT fal
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role_override text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_version integer NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS grants jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dingtalk_title text NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dingtalk_location text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS users_manager ON users(manager_id);
 CREATE TABLE IF NOT EXISTS user_avatars(user_id text PRIMARY KEY REFERENCES users(id), content_type text NOT NULL, data text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
 `;
@@ -115,6 +117,14 @@ export async function registerOrgRoutes(app: FastifyInstance, db: Database, o: O
     if (!isAdmin(user, o)) deny(403, 'FORBIDDEN', 'Administrator access is required');
     const rows = (await db.query(`SELECT ${PUBLIC_USER_COLUMNS},active,is_admin,role_override,grants FROM users WHERE org_id=$1 ORDER BY active DESC,display_name,id`, [user.org_id])).rows;
     return { items: rows.map(r => ({ ...r, executive: o.executiveUserIds.includes(r.id), admin: o.executiveUserIds.includes(r.id) || r.is_admin === true, adminSource: o.executiveUserIds.includes(r.id) ? 'deployment' : r.is_admin ? 'app' : null })) };
+  });
+
+  // Company-wide org chart: every signed-in member can see who reports to whom, titles and locations.
+  // Contact details stay in the department directory and the admin member list.
+  app.get('/org/chart', async req => {
+    const user = actorOf(req);
+    const rows = (await db.query(`SELECT id,display_name,department_id,title,location,timezone,manager_id,avatar_version,role FROM users WHERE org_id=$1 AND active=true ORDER BY display_name,id`, [user.org_id])).rows;
+    return { items: rows };
   });
 
   app.patch<{ Params: { id: string } }>('/org/members/:id', async req => {

@@ -1,6 +1,22 @@
 import type { User } from './auth.js';
+// Superiors see their reports' tasks; reports never see their superiors' tasks.
+// Once the org has reporting lines, a user sees tasks they own, review, or that belong to anyone below them.
+// Before any reporting line exists, the original department rule applies so nothing disappears during rollout.
 export function visibleTask(user: User, task: any) {
-  return task && task.org_id === user.org_id && (user.role === 'manager' ? task.department_id === user.department_id : task.owner_id === user.id);
+  if (!task || task.org_id !== user.org_id) return false;
+  if (task.owner_id === user.id || task.reviewer_id === user.id) return true;
+  if (Array.isArray(user.visibleOwnerIds)) return user.visibleOwnerIds.includes(task.owner_id);
+  return user.role === 'manager' && task.department_id === user.department_id;
+}
+export async function attachReportingScope(db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> }, user: User) {
+  const rows = (await db.query('SELECT id,manager_id FROM users WHERE org_id=$1 AND active=true', [user.org_id])).rows as { id: string; manager_id: string | null }[];
+  if (!rows.some(r => r.manager_id)) { user.visibleOwnerIds = null; return user; }
+  const children = new Map<string, string[]>();
+  for (const r of rows) if (r.manager_id) { if (!children.has(r.manager_id)) children.set(r.manager_id, []); children.get(r.manager_id)!.push(r.id); }
+  const seen = new Set<string>([user.id]), queue = [...(children.get(user.id) || [])];
+  while (queue.length) { const cur = queue.shift()!; if (seen.has(cur)) continue; seen.add(cur); queue.push(...(children.get(cur) || [])); }
+  user.visibleOwnerIds = [...seen];
+  return user;
 }
 export function visibleObjective(user: User, objective: any) {
   return objective && objective.org_id === user.org_id && (objective.level === 'company' || (objective.department_id === user.department_id && (objective.level === 'department' || user.role === 'manager' || objective.owner_id === user.id)));
