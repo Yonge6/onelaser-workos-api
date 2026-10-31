@@ -13,7 +13,7 @@ export type CaldockOptions = {publicUrl?:string;marketingUrl?:string;secureCooki
 const id=z.string().uuid(),providerName=z.enum(['google','apple']);
 const status=z.enum(['pending_payment','paid','provisioning','active','cancelled','refunded']);
 const interval=z.enum(['month','year']);
-const nextView=z.enum(['account','orders','affiliate','checkout','admin']);
+const nextView=z.enum(['account','orders','affiliate','checkout','admin','studio']);
 const token=()=>randomBytes(32).toString('base64url');
 export const caldockCookieName=(secure:boolean,kind='session')=>(secure?'__Host-':'')+'caldock_'+kind;
 function sessionCookie(secure:boolean,value:string,maxAge=604800,kind='session',crossSite=false) {
@@ -49,7 +49,7 @@ export async function registerCaldockRoutes(app:FastifyInstance,db:Database,opti
     else attempts.set(key,{count:1,expires:now+60000});
     if(attempts.size>1000)for(const[k,v]of attempts)if(v.expires<=now)attempts.delete(k);
   };
-  const returnUrl=(view:string,language:string,billing:string,error?:string)=>{const u=new URL('/caldock/',origin);u.searchParams.set('view',view);u.searchParams.set('lang',language);u.searchParams.set('interval',billing);if(error)u.searchParams.set('error',error);return u.toString();};
+  const returnUrl=(view:string,language:string,billing:string,error?:string)=>{const u=new URL(view==='studio'?'/decision-studio/':'/caldock/',origin);u.searchParams.set('view',view);u.searchParams.set('lang',language);u.searchParams.set('interval',billing);if(error)u.searchParams.set('error',error);return u.toString();};
   async function referral(req:FastifyRequest,reply:any,code?:string) {
     const old=readCookie(req.headers.cookie,caldockCookieName(secure,'ref'));
     if(old){const row=(await db.query('SELECT token_hash FROM caldock_referral_visits WHERE token_hash=$1 AND expires_at>now()',[hash(old)])).rows[0];if(row)return row.token_hash;}
