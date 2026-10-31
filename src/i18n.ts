@@ -10,6 +10,16 @@ export function languageFrom(header?:string):Language {
   return preferences[0]?.tag as Language || 'zh';
 }
 const zh:Record<string,string>={
+  'Objective not found':'未找到该目标。',
+  'Only the owner or a department manager can edit this objective':'只有目标负责人或部门负责人可以修改此目标。',
+  'Only the owner or a department manager can edit this key result':'只有目标负责人或部门负责人可以修改此关键结果。',
+  'Only the owner or a department manager can post progress':'只有目标负责人或部门负责人可以更新进展。',
+  'Objective changed; reload before saving':'目标已被他人更新，请刷新后再保存。',
+  'Key result changed; reload before saving':'关键结果已被他人更新，请刷新后再保存。',
+  'Select a visible objective to align with':'请选择有权限查看的目标进行对齐。',
+  'An objective cannot align to itself or its own children':'目标不能对齐到自己或自己的下级目标。',
+  'Select a key result of this objective':'请选择属于此目标的关键结果。',
+  'Status applies to a key result':'状态只能设置在关键结果上。',
   'Select an existing board label':'请选择已有的看板标签。',
   'Select an active group':'请选择尚未归档的分组。',
   'Select a visible top-level parent task':'请选择有权限查看的顶层父任务。',

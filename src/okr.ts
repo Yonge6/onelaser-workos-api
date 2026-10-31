@@ -21,7 +21,7 @@ const base={expectedVersion:z.number().int().positive(),score,note:z.string().tr
 const selfInput=z.object({...base,evidence:z.string().trim().min(10).max(20000)}).strict();
 const managerInput=z.object({...base,selfAppraisalId:id,verifiedEvidence:z.literal(true)}).strict();
 async function accessible(tx:Queryable,user:User,krId:string,lock=false){
-  const kr=(await tx.query(`SELECT k.*,o.org_id,o.department_id,o.owner_id,o.planning AS objective_planning FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE k.id=$1${lock?' FOR UPDATE OF k':''}`,[krId])).rows[0];
+  const kr=(await tx.query(`SELECT k.*,o.org_id,o.department_id,o.owner_id,o.planning AS objective_planning FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE k.id=$1 AND k.archived_at IS NULL AND o.archived_at IS NULL${lock?' FOR UPDATE OF k':''}`,[krId])).rows[0];
   // Personal evaluations are more restrictive than a generally visible department/company goal.
   if(!kr||kr.org_id!==user.org_id||kr.department_id!==user.department_id||(user.role!=='manager'&&kr.owner_id!==user.id))deny(404,'NOT_FOUND','Key result not found');
   return kr;

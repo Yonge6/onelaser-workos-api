@@ -4,6 +4,7 @@ import { registerSupportRoutes, supportPermissions, type SupportOptions } from '
 import { registerPublicWikiRoutes, PUBLIC_WIKI_PATHS, type PublicWikiOptions } from './public-wiki.js';
 import { registerShopifyRoutes, type ShopifyOptions } from './shopify.js';
 import { registerOkrRoutes } from './okr.js';
+import { registerOkrCollabRoutes } from './okr-collab.js';
 import { executiveSummary } from './executive.js';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
@@ -40,7 +41,7 @@ async function loadTask(tx: Queryable, user: User, id: string, lock=false) {
   const task = result.rows[0]; if (!visibleTask(user,task)) deny(404,'NOT_FOUND','Task not found'); return task;
 }
 async function loadKr(tx: Queryable, id: string, lock=false) {
-  return (await tx.query('SELECT k.*,o.org_id,o.department_id,o.owner_id,o.level FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE k.id=$1' + (lock?' FOR UPDATE OF k':''),[id])).rows[0];
+  return (await tx.query('SELECT k.*,o.org_id,o.department_id,o.owner_id,o.level FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE k.id=$1 AND k.archived_at IS NULL AND o.archived_at IS NULL' + (lock?' FOR UPDATE OF k':''),[id])).rows[0];
 }
 async function audit(tx: Queryable, user:User, action:string, objectId:string, details:unknown, ownerId=user.id, departmentId=user.department_id) {
   await tx.query('INSERT INTO audit_events(id,org_id,department_id,owner_id,actor_id,action,object_id,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[randomUUID(),user.org_id,departmentId,ownerId,user.id,action,objectId,JSON.stringify(details)]);
@@ -103,7 +104,7 @@ export async function buildApp(options:AppOptions) {
     catch { return reply.code(503).send({status:'unavailable',service:'onelaser-workos-api'}); }
     return {status:'ok',service:'onelaser-workos-api',version:'0.1.0',database:db.kind,productionReady:false};
   });
-  app.get('/capabilities',async()=>({tasks:true,objectives:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?(integrations.bot&&(!(integrations.botMcpAuthMode==='oauth')||!!(integrations.botOAuth?.publicUrl&&integrations.botOAuth.orgId&&integrations.botOAuth.redirectUris.length))):integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',botMcpAuthMode:integrations.botMcpAuthMode||'bearer',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
+  app.get('/capabilities',async()=>({tasks:true,objectives:true,okrCollaboration:true,submissions:true,humanReviews:true,audit:true,devLogin:devEnabled,dingtalk:integrations.dingtalk?'configured':'not_integrated',aiReview:(integrations.aiReviewMode==='bot'?(integrations.bot&&(!(integrations.botMcpAuthMode==='oauth')||!!(integrations.botOAuth?.publicUrl&&integrations.botOAuth.orgId&&integrations.botOAuth.redirectUris.length))):integrations.ai)?'configured':'not_integrated',aiReviewMode:integrations.aiReviewMode||'api',botMcpAuthMode:integrations.botMcpAuthMode||'bearer',notificationDelivery:integrations.notificationsEnabled&&integrations.dingtalk?'configured':'not_integrated',employeeDecisions:'not_supported',frontendConnected:integrations.frontendConnected===true,teamMode:integrations.teamMode||'department',auth:{provider:'dingtalk',loginEnabled:!!integrations.dingtalk,session:'httpOnlyCookie',csrfHeader:'X-CSRF-Token'},setup:integrations.setup||null}));
   const attempts=new Map<string,{count:number;until:number}>();
   app.post('/auth/dev-login',async(req,reply)=>{
     if(!devEnabled) deny(404,'DEV_LOGIN_DISABLED','Development login is disabled');
@@ -173,11 +174,11 @@ export async function buildApp(options:AppOptions) {
     });return reply.code(201).send(result);
   });
   app.get('/objectives',async req=>{
-    const user=actor(req),rows=(await db.query('SELECT * FROM objectives WHERE org_id=$1 ORDER BY id',[user.org_id])).rows;
+    const user=actor(req),rows=(await db.query('SELECT * FROM objectives WHERE org_id=$1 AND archived_at IS NULL ORDER BY id',[user.org_id])).rows;
     return {items:await attachOkrImportMetadata(db,'objective',rows.filter(o=>visibleObjective(user,o)))};
   });
   app.get('/key-results',async req=>{
-    const user=actor(req),rows=(await db.query('SELECT k.*,o.org_id,o.department_id,o.owner_id,o.level FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE o.org_id=$1 ORDER BY k.id',[user.org_id])).rows;
+    const user=actor(req),rows=(await db.query('SELECT k.*,o.org_id,o.department_id,o.owner_id,o.level FROM key_results k JOIN objectives o ON o.id=k.objective_id WHERE o.org_id=$1 AND k.archived_at IS NULL AND o.archived_at IS NULL ORDER BY k.id',[user.org_id])).rows;
     return {items:await attachOkrImportMetadata(db,'key_result',rows.filter(o=>visibleObjective(user,o)).map(kr=>({...kr,progress:krProgress(kr)})))};
   });
   app.post<{Params:{id:string}}>('/key-results/:id/measurements',async(req,reply)=>{
@@ -199,6 +200,7 @@ export async function buildApp(options:AppOptions) {
   });
   app.get('/audit',async req=>{const [where,params]=scope(actor(req));return {items:(await db.query(`SELECT * FROM audit_events WHERE ${where} ORDER BY created_at DESC,id LIMIT 100`,[...params])).rows,limit:100};});
   await registerOkrRoutes(app,db);
+  await registerOkrCollabRoutes(app,db);
   await registerIntegrationRoutes(app,db,integrations);
   if(options.closeDatabase!==false) app.addHook('onClose',async()=>db.close());
   return app;

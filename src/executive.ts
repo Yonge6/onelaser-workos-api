@@ -30,8 +30,8 @@ export async function executiveSummary(db: Queryable, orgId: string, teamMode='d
     FROM members m LEFT JOIN totals t ON t.dept=m.dept
     GROUP BY m.dept,t.total,t.accepted,t.waiting,t.overdue ORDER BY min(m.name),m.dept`,[orgId])).rows;
   const objectives=(await db.query(`SELECT o.id,o.title,o.level,o.department_id,k.id AS kr_id,k.baseline,k.actual,k.target,k.direction
-    FROM objectives o LEFT JOIN key_results k ON k.objective_id=o.id
-    WHERE o.org_id=$1 AND o.level IN ('company','department') ORDER BY o.id,k.id`,[orgId])).rows;
+    FROM objectives o LEFT JOIN key_results k ON k.objective_id=o.id AND k.archived_at IS NULL
+    WHERE o.org_id=$1 AND o.archived_at IS NULL AND o.level IN ('company','department') ORDER BY o.id,k.id`,[orgId])).rows;
   const grouped=new Map<string,any>();
   for(const row of objectives){
     if(!grouped.has(row.id))grouped.set(row.id,{id:row.id,title:row.title,level:row.level,departmentId:row.department_id,values:[]});
